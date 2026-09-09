@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"time"
@@ -85,11 +86,19 @@ func RedactedURL(databaseURL string) string {
 // MigrateUp applies all pending migrations from a local directory.
 func MigrateUp(databaseURL, dir string) error { return runMigrate(databaseURL, dir, -1) }
 
+// MigrateUpFS applies all pending migrations from an in-memory filesystem
+// (e.g. go:embed).
+func MigrateUpFS(databaseURL string, fsys fs.FS) error { return runMigrateFS(databaseURL, fsys, -1) }
+
 // MigrateDown rolls back n migrations (all if n < 0).
 func MigrateDown(databaseURL, dir string, n int) error { return runMigrate(databaseURL, dir, n) }
 
 func runMigrate(databaseURL, dir string, n int) error {
-	src, err := iofs.New(os.DirFS(dir), ".")
+	return runMigrateFS(databaseURL, os.DirFS(dir), n)
+}
+
+func runMigrateFS(databaseURL string, fsys fs.FS, n int) error {
+	src, err := iofs.New(fsys, ".")
 	if err != nil {
 		return fmt.Errorf("migrate: source: %w", err)
 	}
