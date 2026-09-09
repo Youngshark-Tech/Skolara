@@ -17,6 +17,7 @@ import (
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/academics"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/assignments"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/attendance"
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/finance"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/identity"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/config"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/events"
@@ -95,6 +96,10 @@ func run() error {
 	asgSvc := assignments.NewService(assignments.NewRepo(pool), pool)
 	asgHandler := assignments.NewHandler(asgSvc)
 
+	// Finance bounded context wiring (webhook route is public + HMAC-gated).
+	finSvc := finance.NewService(finance.NewRepo(pool), pool, cfg.WebhookSecret)
+	finHandler := finance.NewHandler(finSvc)
+
 	// Effective permission set = platform roles (identity) ∪ active
 	// membership roles (tenancy). Wired here at the composition root so
 	// neither domain imports the other.
@@ -119,6 +124,8 @@ func run() error {
 	acaHandler.Register(root, jwtMgr, resolver)
 	attHandler.Register(root, jwtMgr, resolver)
 	asgHandler.Register(root, jwtMgr, resolver)
+	finHandler.Register(root, jwtMgr, resolver)
+	finHandler.RegisterWebhook(root)
 
 	// Global middleware chain (outermost first):
 	// recover → security headers → request ID → CORS → body limit → rate limit → timeout.

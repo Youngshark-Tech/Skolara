@@ -33,6 +33,8 @@ type Config struct {
 	AccessTokenExpiry  time.Duration
 	RefreshTokenExpiry time.Duration
 
+	WebhookSecret string
+
 	CORSOrigins []string
 
 	LogLevel  string
@@ -58,6 +60,7 @@ func Load() (*Config, error) {
 		JWTSecret:          os.Getenv("SKOLARA_JWT_SECRET"),
 		AccessTokenExpiry:  durationOr("SKOLARA_ACCESS_TOKEN_EXPIRY", 15*time.Minute),
 		RefreshTokenExpiry: durationOr("SKOLARA_REFRESH_TOKEN_EXPIRY", 30*24*time.Hour),
+		WebhookSecret:      os.Getenv("SKOLARA_WEBHOOK_SECRET"),
 		LogLevel:           envOr("SKOLARA_LOG_LEVEL", "info"),
 		LogFormat:          envOr("SKOLARA_LOG_FORMAT", "json"),
 		RateLimitRPS:       floatOr("SKOLARA_RATE_LIMIT_RPS", 20),

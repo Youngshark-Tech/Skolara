@@ -12,7 +12,11 @@ import (
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
+	// The database/sql (lib/pq) postgres driver executes migration files via
+	// the simple protocol, which applies ALL statements in the file inside
+	// one implicit transaction. The pgx/v5 driver truncates multi-statement
+	// migrations nondeterministically — do not switch back.
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -102,7 +106,7 @@ func runMigrateFS(databaseURL string, fsys fs.FS, n int) error {
 	if err != nil {
 		return fmt.Errorf("migrate: source: %w", err)
 	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, "pgx5://"+stripScheme(databaseURL))
+	m, err := migrate.NewWithSourceInstance("iofs", src, "postgres://"+stripScheme(databaseURL))
 	if err != nil {
 		return fmt.Errorf("migrate: init: %w", err)
 	}
