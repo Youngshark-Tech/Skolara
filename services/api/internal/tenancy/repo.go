@@ -88,7 +88,7 @@ func (r *pgRepo) ListSchools(ctx context.Context, groupID *string) ([]*School, e
 func (r *pgRepo) CreateCampus(ctx context.Context, c *Campus) error {
 	return r.pool.QueryRow(ctx,
 		`INSERT INTO campuses (id, school_id, code, name, location) VALUES ($1,$2,$3,$4,$5)
-		 RETURNING id, school_id, code, name, location`,
+                 RETURNING id, school_id, code, name, location`,
 		c.ID, c.SchoolID, c.Code, c.Name, c.Location).Scan(&c.ID, &c.SchoolID, &c.Code, &c.Name, &c.Location)
 }
 
@@ -115,8 +115,8 @@ const memberCols = `user_id, school_id, r.name, m.status`
 func (r *pgRepo) AddMember(ctx context.Context, m *Membership) error {
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO school_memberships (user_id, school_id, role)
-		 VALUES ($1,$2,(SELECT id FROM roles WHERE name=$3))
-		 ON CONFLICT (user_id, school_id, role) DO NOTHING`,
+                 VALUES ($1,$2,(SELECT id FROM roles WHERE name=$3))
+                 ON CONFLICT (user_id, school_id, role) DO NOTHING`,
 		m.UserID, m.SchoolID, m.Role)
 	return err
 }
@@ -128,8 +128,8 @@ func scanMembership(row pgx.Row, into *Membership) error {
 func (r *pgRepo) MembershipsForUser(ctx context.Context, userID string) ([]*Membership, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT m.user_id, m.school_id, r.name, m.status
-		 FROM school_memberships m JOIN roles r ON r.id = m.role
-		 WHERE m.user_id = $1`, userID)
+                 FROM school_memberships m JOIN roles r ON r.id = m.role
+                 WHERE m.user_id = $1`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -145,15 +145,17 @@ func (r *pgRepo) MembershipsForUser(ctx context.Context, userID string) ([]*Memb
 	return out, rows.Err()
 }
 
-func (r *pgRepo) MembershipStatus(ctx context.Context, userID, schoolID string) (string, error) {
-	var status string
+// HasActiveMembership reports whether ANY active membership row exists for
+// the user at the school. EXISTS over all rows — deterministic by
+// construction; a suspended teacher + active admin combination grants access
+// exactly once, every time.
+func (r *pgRepo) HasActiveMembership(ctx context.Context, userID, schoolID string) (bool, error) {
+	var exists bool
 	err := r.pool.QueryRow(ctx,
-		`SELECT m.status FROM school_memberships m
-		 WHERE m.user_id = $1 AND m.school_id = $2 LIMIT 1`, userID, schoolID).Scan(&status)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrNotFound
-	}
-	return status, err
+		`SELECT EXISTS (
+                        SELECT 1 FROM school_memberships
+                        WHERE user_id = $1 AND school_id = $2 AND status = 'active')`, userID, schoolID).Scan(&exists)
+	return exists, err
 }
 
 // PermissionsFromMemberships unions permission names granted through ACTIVE
@@ -161,10 +163,10 @@ func (r *pgRepo) MembershipStatus(ctx context.Context, userID, schoolID string) 
 func (r *pgRepo) PermissionsFromMemberships(ctx context.Context, userID string) (map[string]bool, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT DISTINCT p.name
-		 FROM school_memberships m
-		 JOIN role_permissions rp ON rp.role_id = m.role
-		 JOIN permissions p ON p.id = rp.permission_id
-		 WHERE m.user_id = $1 AND m.status = 'active'`, userID)
+                 FROM school_memberships m
+                 JOIN role_permissions rp ON rp.role_id = m.role
+                 JOIN permissions p ON p.id = rp.permission_id
+                 WHERE m.user_id = $1 AND m.status = 'active'`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -184,16 +186,16 @@ func (r *pgRepo) IsPlatformAdmin(ctx context.Context, userID string) (bool, erro
 	var exists bool
 	err := r.pool.QueryRow(ctx,
 		`SELECT EXISTS (
-			SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
-			WHERE ur.user_id = $1 AND r.name = 'platform_admin')`, userID).Scan(&exists)
+                        SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+                        WHERE ur.user_id = $1 AND r.name = 'platform_admin')`, userID).Scan(&exists)
 	return exists, err
 }
 
 func (r *pgRepo) ListMembers(ctx context.Context, schoolID string) ([]*Membership, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT m.user_id, m.school_id, r.name, m.status
-		 FROM school_memberships m JOIN roles r ON r.id = m.role
-		 WHERE m.school_id = $1 ORDER BY m.created_at`, schoolID)
+                 FROM school_memberships m JOIN roles r ON r.id = m.role
+                 WHERE m.school_id = $1 ORDER BY m.created_at`, schoolID)
 	if err != nil {
 		return nil, err
 	}
