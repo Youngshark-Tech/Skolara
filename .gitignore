@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+vendor/
+.bin/
+
+# Build artifacts
+dist/
+build/
+*.exe
+*.test
+*.out
+coverage/
+.next/
+out/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test artifacts
+/tmp/
+*.prof
+.coverage
+htmlcov/
+
+# Generated (checked-in only via CI-verified regeneration)
+packages/contracts/generated/
