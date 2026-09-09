@@ -295,17 +295,23 @@ func RequireAuth(jwt *JWTManager, next http.Handler) http.Handler {
 	})
 }
 
+// PermissionResolver resolves a user's effective permission set server-side.
+// The composition root wires a resolver that unions platform roles (identity)
+// with school-scoped membership roles (tenancy).
+type PermissionResolver interface {
+	PermissionsFor(ctx context.Context, userID string) (map[string]bool, error)
+}
+
 // RequirePermission enforces a valid token AND the named permission,
-// resolved server-side from the database (never trusted from the token alone
-// for mutating routes).
-func RequirePermission(jwt *JWTManager, svc *AuthService, permission string, next http.Handler) http.Handler {
+// resolved server-side (never trusted from the token alone).
+func RequirePermission(jwt *JWTManager, resolver PermissionResolver, permission string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := authenticate(r, jwt)
 		if !ok {
 			httpx.Unauthorized(w, "authentication required")
 			return
 		}
-		perms, err := svc.PermissionsFor(r.Context(), claims.UserID)
+		perms, err := resolver.PermissionsFor(r.Context(), claims.UserID)
 		if err != nil {
 			httpx.Internal(w, nil, r.Context(), "permissions", err)
 			return

@@ -10,9 +10,13 @@ import (
 
 // Permission constants used across route registration.
 const (
-	PermUserRead   = "user.read"
-	PermUserManage = "user.manage"
-	PermAuditRead  = "audit.read"
+	PermUserRead     = "user.read"
+	PermUserManage   = "user.manage"
+	PermAuditRead    = "audit.read"
+	PermSchoolRead   = "school.read"
+	PermSchoolManage = "school.manage"
+	PermAcadRead     = "academics.read"
+	PermAcadManage   = "academics.manage"
 )
 
 // RolePlatformAdmin bypasses scope checks (platform-level operator).

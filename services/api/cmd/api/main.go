@@ -22,6 +22,8 @@ import (
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/middleware"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/observability"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/postgres"
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/tenancy"
+	migrations "github.com/Roy-Wanyoike/Skolara/services/api/migrations"
 )
 
 func main() {
@@ -54,8 +56,9 @@ func run() error {
 	}
 	defer pool.Close()
 
-	if err := postgres.MigrateUp(cfg.DatabaseURL, "migrations"); err != nil {
-		log.Warn("migrations not applied automatically", "error", err.Error())
+	// Self-migrate from the embedded schema at startup (production-safe).
+	if err := postgres.MigrateUpFS(cfg.DatabaseURL, migrations.FS); err != nil {
+		return fmt.Errorf("migrations: %w", err)
 	}
 
 	// Identity bounded context wiring.
@@ -67,6 +70,15 @@ func run() error {
 	if err := bootstrapPlatformAdmin(ctx, authSvc, log); err != nil {
 		return fmt.Errorf("bootstrap admin: %w", err)
 	}
+
+	// Tenancy bounded context wiring.
+	tenSvc := tenancy.NewService(tenancy.NewRepo(pool), pool)
+	tenHandler := tenancy.NewHandler(tenSvc)
+
+	// Effective permission set = platform roles (identity) ∪ active
+	// membership roles (tenancy). Wired here at the composition root so
+	// neither domain imports the other.
+	resolver := combinedResolver{platform: authSvc, membership: tenSvc}
 
 	// Event dispatcher (transactional outbox, ADR-003).
 	dispatcher := events.NewDispatcher(pool, events.LogPublisher{Logf: func(f string, a ...any) {
@@ -82,6 +94,7 @@ func run() error {
 		httpx.WriteError(w, http.StatusNotFound, "not_found", "resource not found")
 	})
 	idHandler.Register(root)
+	tenHandler.Register(root, jwtMgr, resolver)
 
 	// Global middleware chain (outermost first):
 	// recover → security headers → request ID → CORS → body limit → rate limit → timeout.
@@ -143,4 +156,28 @@ func bootstrapPlatformAdmin(ctx context.Context, svc *identity.AuthService, log 
 	})
 	log.Info("bootstrap platform admin created", "email", email)
 	return nil
+}
+
+// combinedResolver unions permission sets from platform roles and school
+// membership roles (ADR-006/007 authorization model).
+type combinedResolver struct {
+	platform   identity.PermissionResolver
+	membership identity.PermissionResolver
+}
+
+func (c combinedResolver) PermissionsFor(ctx context.Context, userID string) (map[string]bool, error) {
+	perms, err := c.platform.PermissionsFor(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	mp, err := c.membership.PermissionsFor(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range mp {
+		if v {
+			perms[k] = true
+		}
+	}
+	return perms, nil
 }
