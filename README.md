@@ -14,13 +14,21 @@ Observe → Understand → Predict → Simulate → Optimize → Communicate →
 
 ```
 skolara/
-├── apps/web/            # Next.js web application (React, TypeScript, Tailwind, shadcn-style UI)
-├── services/api/        # Go modular monolith — domain-bounded backend API
-├── packages/contracts/  # OpenAPI contracts & generated typed clients
+├── apps/web/            # Next.js 15 web application (TypeScript, Tailwind)
+├── services/api/        # Go modular monolith — identity, tenancy, students, academics,
+│                         # attendance, assignments, finance (bounded contexts)
+├── packages/contracts/  # OpenAPI 3.1 spec (source of truth) + generated TS types
 ├── infrastructure/      # Docker, Compose, deployment
-├── docs/                # Architecture, ADRs, domain docs, runbooks, master spec
+├── scripts/             # Live E2E smoke + ops scripts
+├── docs/                # ADRs, domain docs, threat model, runbook, QA report, roadmap
 └── .github/workflows/   # CI pipelines
 ```
+
+## Status
+
+Production-ready alpha for pilot onboarding — see the
+[QA report](docs/qa/QA_REPORT.md), [runbook](docs/operations/RUNBOOK.md), and
+[roadmap](docs/operations/ROADMAP.md).
 
 ## Key Principles
 
