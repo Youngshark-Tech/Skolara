@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // ErrBody is the standard API error envelope.
@@ -59,6 +60,92 @@ func RequestIDMiddleware(next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Request-ID", id)
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxRequestID, id)))
+	})
+}
+
+// StatusWriter captures the response status code for metrics and access
+// logging while proxying everything to the underlying ResponseWriter.
+type StatusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+// NewStatusWriter wraps w, defaulting the captured status to 200 (implicit
+// writes).
+func NewStatusWriter(w http.ResponseWriter) *StatusWriter {
+	return &StatusWriter{ResponseWriter: w, status: http.StatusOK}
+}
+
+// Status returns the captured status code.
+func (w *StatusWriter) Status() int { return w.status }
+
+func (w *StatusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// Write is overridden so implicit 200s are tracked too.
+func (w *StatusWriter) Write(b []byte) (int, error) {
+	return w.ResponseWriter.Write(b)
+}
+
+// Flush lets streaming handlers pass through to the underlying writer.
+func (w *StatusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// RequestScope is a per-request scratch record created by the access-log
+// middleware and mutated by deeper layers (auth, tenant resolution) so the
+// final log line carries actor and tenant without log-context plumbing.
+type RequestScope struct {
+	ActorID  string
+	TenantID string
+}
+
+type scopeKey struct{}
+
+// WithScope injects a fresh scope into the context.
+func WithScope(ctx context.Context, s *RequestScope) context.Context {
+	return context.WithValue(ctx, scopeKey{}, s)
+}
+
+// ScopeFrom returns the request scope, or nil when absent (e.g. unit tests
+// that mount handlers without the access-log middleware).
+func ScopeFrom(ctx context.Context) *RequestScope {
+	s, _ := ctx.Value(scopeKey{}).(*RequestScope)
+	return s
+}
+
+// AccessLogMiddleware writes one structured line per request (method, path,
+// status, duration, request id, actor, tenant). It must sit OUTSIDE the
+// request-id middleware (request id is read from the response header) and
+// creates the RequestScope deeper layers annotate.
+func AccessLogMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		sw := NewStatusWriter(w)
+		scope := &RequestScope{}
+		next.ServeHTTP(sw, r.WithContext(WithScope(r.Context(), scope)))
+		if logger == nil {
+			return
+		}
+		attrs := []slog.Attr{
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.Path),
+			slog.Int("status", sw.Status()),
+			slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+			slog.String("request_id", w.Header().Get("X-Request-ID")),
+			slog.String("remote", r.RemoteAddr),
+		}
+		if scope.ActorID != "" {
+			attrs = append(attrs, slog.String("actor_id", scope.ActorID))
+		}
+		if scope.TenantID != "" {
+			attrs = append(attrs, slog.String("school_id", scope.TenantID))
+		}
+		logger.LogAttrs(r.Context(), slog.LevelInfo, "http_request", attrs...)
 	})
 }
 

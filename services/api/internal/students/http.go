@@ -7,6 +7,7 @@ import (
 
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/identity"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/httpx"
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/observability"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/tenancy"
 )
 
@@ -21,25 +22,25 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 // the tenant school comes from tenancy.SchoolFrom (students → identity/tenancy,
 // one-directional like tenancy → identity — never the reverse).
 func (h *Handler) Register(mux *http.ServeMux, jwt *identity.JWTManager, resolver identity.PermissionResolver) {
-	mux.Handle("POST /api/v1/learners",
+	observability.Register(mux, "POST /api/v1/learners",
 		identity.RequirePermission(jwt, resolver, identity.PermStudentManage, h.schoolScoped(h.createLearner)))
-	mux.Handle("GET /api/v1/learners",
+	observability.Register(mux, "GET /api/v1/learners",
 		identity.RequirePermission(jwt, resolver, identity.PermStudentRead, h.schoolScoped(h.listLearners)))
-	mux.Handle("GET /api/v1/learners/{id}",
+	observability.Register(mux, "GET /api/v1/learners/{id}",
 		identity.RequirePermission(jwt, resolver, identity.PermStudentRead, h.schoolScoped(h.getLearner)))
 
-	mux.Handle("POST /api/v1/guardians",
+	observability.Register(mux, "POST /api/v1/guardians",
 		identity.RequirePermission(jwt, resolver, identity.PermStudentManage, h.schoolScoped(h.createGuardian)))
-	mux.Handle("POST /api/v1/learners/{id}/guardians",
+	observability.Register(mux, "POST /api/v1/learners/{id}/guardians",
 		identity.RequirePermission(jwt, resolver, identity.PermStudentManage, h.schoolScoped(h.linkGuardian)))
-	mux.Handle("GET /api/v1/learners/{id}/guardians",
+	observability.Register(mux, "GET /api/v1/learners/{id}/guardians",
 		identity.RequirePermission(jwt, resolver, identity.PermStudentRead, h.schoolScoped(h.listGuardians)))
 
-	mux.Handle("POST /api/v1/enrollments",
+	observability.Register(mux, "POST /api/v1/enrollments",
 		identity.RequirePermission(jwt, resolver, identity.PermStudentManage, h.schoolScoped(h.createEnrollment)))
-	mux.Handle("GET /api/v1/enrollments",
+	observability.Register(mux, "GET /api/v1/enrollments",
 		identity.RequirePermission(jwt, resolver, identity.PermStudentRead, h.schoolScoped(h.listEnrollments)))
-	mux.Handle("POST /api/v1/enrollments/{id}/transition",
+	observability.Register(mux, "POST /api/v1/enrollments/{id}/transition",
 		identity.RequirePermission(jwt, resolver, identity.PermStudentManage, h.schoolScoped(h.transitionEnrollment)))
 }
 

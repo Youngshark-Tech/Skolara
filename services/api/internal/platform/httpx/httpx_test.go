@@ -1,7 +1,9 @@
 package httpx
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -143,5 +145,46 @@ func TestBodyLimitMiddleware(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge && rec.Code != http.StatusBadRequest {
 		t.Fatalf("oversized body status %d", rec.Code)
+	}
+}
+
+func TestAccessLogEmitsScopeAndRequestID(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate deeper layers annotating the scope.
+		if sc := ScopeFrom(r.Context()); sc != nil {
+			sc.ActorID = "user-1"
+			sc.TenantID = "school-1"
+		}
+		// Simulate request-id middleware having run (sets response header).
+		w.Header().Set("X-Request-ID", "req-42")
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	handler := AccessLogMiddleware(logger, inner)
+	req := httptest.NewRequest("POST", "/api/v1/things", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	line := buf.String()
+	for _, want := range []string{`"request_id":"req-42"`, `"actor_id":"user-1"`, `"school_id":"school-1"`, `"status":201`, `"method":"POST"`, `"path":"/api/v1/things"`} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("log line missing %s: %s", want, line)
+		}
+	}
+}
+
+func TestAccessLogWithoutScopeStillLogs(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	handler := AccessLogMiddleware(logger, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest("GET", "/healthz", nil))
+	if !strings.Contains(buf.String(), `"status":200`) {
+		t.Fatalf("missing status in log: %s", buf.String())
 	}
 }

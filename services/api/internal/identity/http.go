@@ -10,6 +10,7 @@ import (
 
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/events"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/httpx"
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/observability"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/postgres"
 )
 
@@ -29,14 +30,14 @@ func NewHandler(svc *AuthService, jwt *JWTManager, pool *postgres.Pool) *Handler
 const refreshCookieName = "skolara_refresh"
 
 func (h *Handler) Register(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/auth/login", h.handleLogin)
-	mux.HandleFunc("POST /api/v1/auth/refresh", h.handleRefresh)
-	mux.HandleFunc("POST /api/v1/auth/logout", h.handleLogout)
-	mux.Handle("GET /api/v1/me", RequireAuth(h.jwt, http.HandlerFunc(h.handleMe)))
-	mux.Handle("GET /api/v1/users", RequirePermission(h.jwt, h.svc, PermUserRead, http.HandlerFunc(h.handleListUsers)))
-	mux.Handle("POST /api/v1/users", RequirePermission(h.jwt, h.svc, PermUserManage, http.HandlerFunc(h.handleCreateUser)))
-	mux.Handle("GET /api/v1/users/{id}", RequirePermission(h.jwt, h.svc, PermUserRead, http.HandlerFunc(h.handleGetUser)))
-	mux.Handle("POST /api/v1/users/{id}/roles", RequirePermission(h.jwt, h.svc, PermUserManage, http.HandlerFunc(h.handleAssignRole)))
+	observability.RegisterFunc(mux, "POST /api/v1/auth/login", h.handleLogin)
+	observability.RegisterFunc(mux, "POST /api/v1/auth/refresh", h.handleRefresh)
+	observability.RegisterFunc(mux, "POST /api/v1/auth/logout", h.handleLogout)
+	observability.Register(mux, "GET /api/v1/me", RequireAuth(h.jwt, http.HandlerFunc(h.handleMe)))
+	observability.Register(mux, "GET /api/v1/users", RequirePermission(h.jwt, h.svc, PermUserRead, http.HandlerFunc(h.handleListUsers)))
+	observability.Register(mux, "POST /api/v1/users", RequirePermission(h.jwt, h.svc, PermUserManage, http.HandlerFunc(h.handleCreateUser)))
+	observability.Register(mux, "GET /api/v1/users/{id}", RequirePermission(h.jwt, h.svc, PermUserRead, http.HandlerFunc(h.handleGetUser)))
+	observability.Register(mux, "POST /api/v1/users/{id}/roles", RequirePermission(h.jwt, h.svc, PermUserManage, http.HandlerFunc(h.handleAssignRole)))
 }
 
 type loginRequest struct {
