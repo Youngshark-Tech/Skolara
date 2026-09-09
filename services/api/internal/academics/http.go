@@ -6,6 +6,7 @@ import (
 
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/identity"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/httpx"
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/observability"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/tenancy"
 )
 
@@ -20,33 +21,33 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 // the tenant school comes from tenancy.SchoolFrom (academics → identity/
 // tenancy, one-directional — never the reverse).
 func (h *Handler) Register(mux *http.ServeMux, jwt *identity.JWTManager, resolver identity.PermissionResolver) {
-	mux.Handle("POST /api/v1/academic-years",
+	observability.Register(mux, "POST /api/v1/academic-years",
 		identity.RequirePermission(jwt, resolver, identity.PermAcadManage, h.schoolScoped(h.createAcademicYear)))
-	mux.Handle("GET /api/v1/academic-years",
+	observability.Register(mux, "GET /api/v1/academic-years",
 		identity.RequirePermission(jwt, resolver, identity.PermAcadRead, h.schoolScoped(h.listAcademicYears)))
-	mux.Handle("GET /api/v1/academic-years/{id}",
+	observability.Register(mux, "GET /api/v1/academic-years/{id}",
 		identity.RequirePermission(jwt, resolver, identity.PermAcadRead, h.schoolScoped(h.getAcademicYear)))
-	mux.Handle("GET /api/v1/academic-years/{id}/terms",
+	observability.Register(mux, "GET /api/v1/academic-years/{id}/terms",
 		identity.RequirePermission(jwt, resolver, identity.PermAcadRead, h.schoolScoped(h.listTerms)))
-	mux.Handle("POST /api/v1/terms",
+	observability.Register(mux, "POST /api/v1/terms",
 		identity.RequirePermission(jwt, resolver, identity.PermAcadManage, h.schoolScoped(h.createTerm)))
 
-	mux.Handle("POST /api/v1/subjects",
+	observability.Register(mux, "POST /api/v1/subjects",
 		identity.RequirePermission(jwt, resolver, identity.PermAcadManage, h.schoolScoped(h.createSubject)))
-	mux.Handle("GET /api/v1/subjects",
+	observability.Register(mux, "GET /api/v1/subjects",
 		identity.RequirePermission(jwt, resolver, identity.PermAcadRead, h.schoolScoped(h.listSubjects)))
 
-	mux.Handle("POST /api/v1/classes",
+	observability.Register(mux, "POST /api/v1/classes",
 		identity.RequirePermission(jwt, resolver, identity.PermAcadManage, h.schoolScoped(h.createClass)))
-	mux.Handle("GET /api/v1/classes",
+	observability.Register(mux, "GET /api/v1/classes",
 		identity.RequirePermission(jwt, resolver, identity.PermAcadRead, h.schoolScoped(h.listClasses)))
-	mux.Handle("GET /api/v1/classes/{id}/roster",
+	observability.Register(mux, "GET /api/v1/classes/{id}/roster",
 		identity.RequirePermission(jwt, resolver, identity.PermAcadRead, h.schoolScoped(h.listRoster)))
-	mux.Handle("POST /api/v1/classes/{id}/roster",
+	observability.Register(mux, "POST /api/v1/classes/{id}/roster",
 		identity.RequirePermission(jwt, resolver, identity.PermAcadManage, h.schoolScoped(h.addRoster)))
-	mux.Handle("GET /api/v1/classes/{id}/teachers",
+	observability.Register(mux, "GET /api/v1/classes/{id}/teachers",
 		identity.RequirePermission(jwt, resolver, identity.PermAcadRead, h.schoolScoped(h.listTeachers)))
-	mux.Handle("POST /api/v1/classes/{id}/teachers",
+	observability.Register(mux, "POST /api/v1/classes/{id}/teachers",
 		identity.RequirePermission(jwt, resolver, identity.PermAcadManage, h.schoolScoped(h.assignTeacher)))
 }
 

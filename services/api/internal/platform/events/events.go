@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/observability"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -62,7 +63,7 @@ func Record(ctx context.Context, q Querier, schoolID *string, aggregateID, event
 	}
 
 	const query = `INSERT INTO event_outbox (event_id, event_type, schema_version, school_id, aggregate_id, occurred_at, actor_id, correlation_id, payload)
-	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
 	if _, err := q.Exec(ctx, query, env.EventID, env.Type, env.SchemaVer, env.SchoolID,
 		env.AggregateID, env.OccurredAt, env.ActorID, env.CorrelationID, env.Payload); err != nil {
 		return Envelope{}, fmt.Errorf("events: record: %w", err)
@@ -144,10 +145,10 @@ func (d *Dispatcher) Run(ctx context.Context) {
 func (d *Dispatcher) deliverBatch(ctx context.Context) error {
 	rows, err := d.q.Query(ctx,
 		`SELECT event_id, event_type, schema_version, school_id, aggregate_id, occurred_at, actor_id, correlation_id, payload
-		 FROM event_outbox
-		 WHERE published_at IS NULL AND attempts < $1
-		 ORDER BY occurred_at
-		 LIMIT 100`, d.maxRetries)
+                 FROM event_outbox
+                 WHERE published_at IS NULL AND attempts < $1
+                 ORDER BY occurred_at
+                 LIMIT 100`, d.maxRetries)
 	if err != nil {
 		return err
 	}
@@ -174,6 +175,7 @@ func (d *Dispatcher) deliverBatch(ctx context.Context) error {
 			continue
 		}
 		_, _ = d.q.Exec(ctx, `UPDATE event_outbox SET published_at = now() WHERE event_id = $1`, env.EventID)
+		observability.IncEventsPublished()
 	}
 	return nil
 }

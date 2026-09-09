@@ -9,6 +9,7 @@ import (
 
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/identity"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/httpx"
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/observability"
 )
 
 func newID() string {
@@ -63,26 +64,26 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 // Register wires routes. jwt + resolver come from the identity context
 // (imported, one-directional: tenancy → identity, never the reverse).
 func (h *Handler) Register(mux *http.ServeMux, jwt *identity.JWTManager, resolver identity.PermissionResolver) {
-	mux.Handle("POST /api/v1/education-groups",
+	observability.Register(mux, "POST /api/v1/education-groups",
 		identity.RequirePermission(jwt, resolver, identity.PermSchoolManage, http.HandlerFunc(h.createGroup)))
-	mux.Handle("GET /api/v1/education-groups",
+	observability.Register(mux, "GET /api/v1/education-groups",
 		identity.RequirePermission(jwt, resolver, identity.PermSchoolRead, http.HandlerFunc(h.listGroups)))
 
-	mux.Handle("POST /api/v1/schools",
+	observability.Register(mux, "POST /api/v1/schools",
 		identity.RequirePermission(jwt, resolver, identity.PermSchoolManage, http.HandlerFunc(h.createSchool)))
-	mux.Handle("GET /api/v1/schools",
+	observability.Register(mux, "GET /api/v1/schools",
 		identity.RequirePermission(jwt, resolver, identity.PermSchoolRead, http.HandlerFunc(h.listSchools)))
-	mux.Handle("GET /api/v1/schools/{id}",
+	observability.Register(mux, "GET /api/v1/schools/{id}",
 		identity.RequirePermission(jwt, resolver, identity.PermSchoolRead, http.HandlerFunc(h.getSchool)))
-	mux.Handle("GET /api/v1/schools/{id}/campuses",
+	observability.Register(mux, "GET /api/v1/schools/{id}/campuses",
 		identity.RequirePermission(jwt, resolver, identity.PermSchoolRead, http.HandlerFunc(h.listCampuses)))
-	mux.Handle("POST /api/v1/schools/{id}/campuses",
+	observability.Register(mux, "POST /api/v1/schools/{id}/campuses",
 		identity.RequirePermission(jwt, resolver, identity.PermAcadManage, http.HandlerFunc(h.createCampus)))
-	mux.Handle("GET /api/v1/schools/{id}/members",
+	observability.Register(mux, "GET /api/v1/schools/{id}/members",
 		identity.RequirePermission(jwt, resolver, identity.PermSchoolRead, http.HandlerFunc(h.listMembers)))
-	mux.Handle("POST /api/v1/schools/{id}/members",
+	observability.Register(mux, "POST /api/v1/schools/{id}/members",
 		identity.RequirePermission(jwt, resolver, identity.PermSchoolManage, http.HandlerFunc(h.addMember)))
-	mux.Handle("GET /api/v1/me/memberships",
+	observability.Register(mux, "GET /api/v1/me/memberships",
 		identity.RequireAuth(jwt, http.HandlerFunc(h.myMemberships)))
 }
 

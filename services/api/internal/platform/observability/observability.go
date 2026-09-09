@@ -5,8 +5,10 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/httpx"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -41,12 +43,33 @@ func init() {
 func MetricsMiddleware(route string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		sw := httpx.NewStatusWriter(w)
 		next.ServeHTTP(sw, r)
-		status := strconv.Itoa(sw.status)
+		status := strconv.Itoa(sw.Status())
 		httpDuration.WithLabelValues(route, r.Method, status).Observe(time.Since(start).Seconds())
 		httpTotal.WithLabelValues(route, r.Method, status).Inc()
 	})
+}
+
+// RouteLabel strips the method prefix from a ServeMux pattern
+// ("GET /api/v1/learners/{id}" -> "/api/v1/learners/{id}").
+func RouteLabel(pattern string) string {
+	if i := strings.Index(pattern, " "); i >= 0 {
+		return pattern[i+1:]
+	}
+	return pattern
+}
+
+// Register mounts h on mux under pattern WITH per-route metrics attached.
+// Every domain route registration goes through this so /metrics carries the
+// full RED picture with route-template labels.
+func Register(mux *http.ServeMux, pattern string, h http.Handler) {
+	mux.Handle(pattern, MetricsMiddleware(RouteLabel(pattern), h))
+}
+
+// RegisterFunc is Register for http.HandlerFunc.
+func RegisterFunc(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
+	mux.Handle(pattern, MetricsMiddleware(RouteLabel(pattern), h))
 }
 
 // IncEventsPublished bumps the outbox delivery counter.
