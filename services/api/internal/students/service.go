@@ -109,8 +109,8 @@ func (s *Service) LearnerByID(ctx context.Context, schoolID, learnerID string) (
 
 // ListLearners lists learners enrolled at the school, optionally filtered by
 // a name substring.
-func (s *Service) ListLearners(ctx context.Context, schoolID, query string) ([]*Learner, error) {
-	return s.repo.ListLearners(ctx, schoolID, strings.TrimSpace(query))
+func (s *Service) ListLearners(ctx context.Context, schoolID, query string, limit, offset int) ([]*Learner, int, error) {
+	return s.repo.ListLearners(ctx, schoolID, strings.TrimSpace(query), limit, offset)
 }
 
 // CreateGuardian provisions a guardian and emits students.GuardianCreated v1.
@@ -252,8 +252,8 @@ func (s *Service) EnrollLearner(ctx context.Context, schoolID string, in Enrollm
 }
 
 // ListEnrollments lists a school's enrollments, optionally filtered by status.
-func (s *Service) ListEnrollments(ctx context.Context, schoolID string, status *EnrollmentStatus) ([]*Enrollment, error) {
-	return s.repo.ListEnrollments(ctx, schoolID, status)
+func (s *Service) ListEnrollments(ctx context.Context, schoolID string, status *EnrollmentStatus, limit, offset int) ([]*Enrollment, int, error) {
+	return s.repo.ListEnrollments(ctx, schoolID, status, limit, offset)
 }
 
 // TransitionEnrollment applies the lifecycle state machine then persists the

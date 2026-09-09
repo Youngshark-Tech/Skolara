@@ -3,6 +3,7 @@ package students
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/identity"
@@ -85,12 +86,16 @@ func (h *Handler) createLearner(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listLearners(w http.ResponseWriter, r *http.Request) {
-	learners, err := h.svc.ListLearners(r.Context(), tenancy.SchoolFrom(r.Context()), r.URL.Query().Get("q"))
+	limit, offset := httpx.Pagination(r)
+	learners, total, err := h.svc.ListLearners(r.Context(), tenancy.SchoolFrom(r.Context()), r.URL.Query().Get("q"), limit, offset)
 	if err != nil {
 		httpx.Internal(w, nil, r.Context(), "list learners", err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, learners)
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"learners": learners, "total": total, "limit": limit, "offset": offset,
+	})
 }
 
 func (h *Handler) getLearner(w http.ResponseWriter, r *http.Request) {
@@ -197,12 +202,16 @@ func (h *Handler) listEnrollments(w http.ResponseWriter, r *http.Request) {
 		}
 		status = &s
 	}
-	enrollments, err := h.svc.ListEnrollments(r.Context(), tenancy.SchoolFrom(r.Context()), status)
+	limit, offset := httpx.Pagination(r)
+	enrollments, total, err := h.svc.ListEnrollments(r.Context(), tenancy.SchoolFrom(r.Context()), status, limit, offset)
 	if err != nil {
 		httpx.Internal(w, nil, r.Context(), "list enrollments", err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, enrollments)
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"enrollments": enrollments, "total": total, "limit": limit, "offset": offset,
+	})
 }
 
 func (h *Handler) transitionEnrollment(w http.ResponseWriter, r *http.Request) {

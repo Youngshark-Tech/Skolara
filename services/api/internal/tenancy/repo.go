@@ -66,23 +66,28 @@ func (r *pgRepo) SchoolByCode(ctx context.Context, code string) (*School, error)
 		`SELECT `+schoolCols+` FROM schools WHERE lower(code) = lower($1)`, code))
 }
 
-func (r *pgRepo) ListSchools(ctx context.Context, groupID *string) ([]*School, error) {
+func (r *pgRepo) ListSchools(ctx context.Context, groupID *string, limit, offset int) ([]*School, int, error) {
+	var total int
+	if err := r.pool.QueryRow(ctx,
+		`SELECT count(*) FROM schools WHERE ($1::uuid IS NULL OR group_id = $1)`, groupID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := r.pool.Query(ctx,
-		`SELECT `+schoolCols+` FROM schools WHERE ($1::uuid IS NULL OR group_id = $1) ORDER BY name`,
-		groupID)
+		`SELECT `+schoolCols+` FROM schools WHERE ($1::uuid IS NULL OR group_id = $1) ORDER BY name LIMIT $2 OFFSET $3`,
+		groupID, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []*School
 	for rows.Next() {
 		s, err := scanSchool(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, s)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 func (r *pgRepo) CreateCampus(ctx context.Context, c *Campus) error {
@@ -92,22 +97,28 @@ func (r *pgRepo) CreateCampus(ctx context.Context, c *Campus) error {
 		c.ID, c.SchoolID, c.Code, c.Name, c.Location).Scan(&c.ID, &c.SchoolID, &c.Code, &c.Name, &c.Location)
 }
 
-func (r *pgRepo) ListCampuses(ctx context.Context, schoolID string) ([]*Campus, error) {
+func (r *pgRepo) ListCampuses(ctx context.Context, schoolID string, limit, offset int) ([]*Campus, int, error) {
+	var total int
+	if err := r.pool.QueryRow(ctx,
+		`SELECT count(*) FROM campuses WHERE school_id = $1`, schoolID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, school_id, code, name, location FROM campuses WHERE school_id = $1 ORDER BY name`, schoolID)
+		`SELECT id, school_id, code, name, location FROM campuses WHERE school_id = $1 ORDER BY name LIMIT $2 OFFSET $3`,
+		schoolID, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []*Campus
 	for rows.Next() {
 		c := &Campus{}
 		if err := rows.Scan(&c.ID, &c.SchoolID, &c.Code, &c.Name, &c.Location); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 const memberCols = `user_id, school_id, r.name, m.status`
@@ -199,22 +210,27 @@ func (r *pgRepo) IsPlatformAdmin(ctx context.Context, userID string) (bool, erro
 	return exists, err
 }
 
-func (r *pgRepo) ListMembers(ctx context.Context, schoolID string) ([]*Membership, error) {
+func (r *pgRepo) ListMembers(ctx context.Context, schoolID string, limit, offset int) ([]*Membership, int, error) {
+	var total int
+	if err := r.pool.QueryRow(ctx,
+		`SELECT count(*) FROM school_memberships WHERE school_id = $1`, schoolID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := r.pool.Query(ctx,
 		`SELECT m.user_id, m.school_id, r.name, m.status
                  FROM school_memberships m JOIN roles r ON r.id = m.role
-                 WHERE m.school_id = $1 ORDER BY m.created_at`, schoolID)
+                 WHERE m.school_id = $1 ORDER BY m.created_at LIMIT $2 OFFSET $3`, schoolID, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []*Membership
 	for rows.Next() {
 		m := &Membership{}
 		if err := scanMembership(rows, m); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }

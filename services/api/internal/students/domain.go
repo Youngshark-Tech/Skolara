@@ -192,9 +192,10 @@ type Repo interface {
 	// LearnerInSchool resolves a learner ONLY when it holds an enrollment at
 	// the given school — the tenant visibility guard for cross-school reads.
 	LearnerInSchool(ctx context.Context, schoolID, learnerID string) (*Learner, error)
-	// ListLearners lists learners via their enrollments (tenant-scoped);
-	// query optionally filters by name substring.
-	ListLearners(ctx context.Context, schoolID, query string) ([]*Learner, error)
+	// ListLearners lists learners via their enrollments (tenant-scoped),
+	// paginated; query optionally filters by name substring. Returns the
+	// page plus the total match count.
+	ListLearners(ctx context.Context, schoolID, query string, limit, offset int) ([]*Learner, int, error)
 
 	// Guardians and links.
 	CreateGuardian(ctx context.Context, g *Guardian) error
@@ -205,7 +206,7 @@ type Repo interface {
 	// Enrollments — always tenant-scoped by schoolID.
 	CreateEnrollment(ctx context.Context, e *Enrollment) error
 	EnrollmentByIDInSchool(ctx context.Context, schoolID, id string) (*Enrollment, error)
-	ListEnrollments(ctx context.Context, schoolID string, status *EnrollmentStatus) ([]*Enrollment, error)
+	ListEnrollments(ctx context.Context, schoolID string, status *EnrollmentStatus, limit, offset int) ([]*Enrollment, int, error)
 	HasOpenEnrollment(ctx context.Context, schoolID, learnerID string) (bool, error)
 	UpdateEnrollmentStatus(ctx context.Context, id string, from, to EnrollmentStatus, endedAt *time.Time) error
 }

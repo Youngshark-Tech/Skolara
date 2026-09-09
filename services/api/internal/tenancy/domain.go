@@ -51,10 +51,10 @@ type Repo interface {
 	CreateSchool(ctx context.Context, s *School) error
 	SchoolByID(ctx context.Context, id string) (*School, error)
 	SchoolByCode(ctx context.Context, code string) (*School, error)
-	ListSchools(ctx context.Context, groupID *string) ([]*School, error)
+	ListSchools(ctx context.Context, groupID *string, limit, offset int) ([]*School, int, error)
 
 	CreateCampus(ctx context.Context, c *Campus) error
-	ListCampuses(ctx context.Context, schoolID string) ([]*Campus, error)
+	ListCampuses(ctx context.Context, schoolID string, limit, offset int) ([]*Campus, int, error)
 
 	AddMember(ctx context.Context, m *Membership) error
 	MembershipsForUser(ctx context.Context, userID string) ([]*Membership, error)
@@ -62,7 +62,7 @@ type Repo interface {
 	// membership at the school, regardless of role. Deterministic over all
 	// membership rows — access decisions must not depend on row order.
 	HasActiveMembership(ctx context.Context, userID, schoolID string) (bool, error)
-	ListMembers(ctx context.Context, schoolID string) ([]*Membership, error)
+	ListMembers(ctx context.Context, schoolID string, limit, offset int) ([]*Membership, int, error)
 	IsPlatformAdmin(ctx context.Context, userID string) (bool, error)
 	PermissionsFromMemberships(ctx context.Context, userID string) (map[string]bool, error)
 }

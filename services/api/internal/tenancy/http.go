@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/identity"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/httpx"
@@ -145,14 +146,18 @@ func (h *Handler) createSchool(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) listSchools(w http.ResponseWriter, r *http.Request) {
 	claims := identity.ClaimsFrom(r.Context())
+	limit, offset := httpx.Pagination(r)
 	// Platform admins list everything; others only their schools.
 	if ok, _ := h.svc.IsPlatformAdmin(r.Context(), claims.UserID); ok {
-		schools, err := h.svc.ListSchools(r.Context(), r.URL.Query().Get("groupId"))
+		schools, total, err := h.svc.ListSchools(r.Context(), r.URL.Query().Get("groupId"), limit, offset)
 		if err != nil {
 			httpx.Internal(w, nil, r.Context(), "list schools", err)
 			return
 		}
-		httpx.JSON(w, http.StatusOK, schools)
+		w.Header().Set("X-Total-Count", strconv.Itoa(total))
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"schools": schools, "total": total, "limit": limit, "offset": offset,
+		})
 		return
 	}
 	memberships, err := h.svc.MembershipsFor(r.Context(), claims.UserID)
@@ -169,7 +174,11 @@ func (h *Handler) listSchools(w http.ResponseWriter, r *http.Request) {
 			out = append(out, s)
 		}
 	}
-	httpx.JSON(w, http.StatusOK, out)
+	w.Header().Set("X-Total-Count", strconv.Itoa(len(out)))
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"schools": out, "total": len(out),
+	})
+
 }
 
 func (h *Handler) getSchool(w http.ResponseWriter, r *http.Request) {
@@ -203,12 +212,16 @@ func (h *Handler) listCampuses(w http.ResponseWriter, r *http.Request) {
 		httpx.NotFound(w, "school not found")
 		return
 	}
-	campuses, err := h.svc.Campuses(r.Context(), id)
+	limit, offset := httpx.Pagination(r)
+	campuses, total, err := h.svc.Campuses(r.Context(), id, limit, offset)
 	if err != nil {
 		httpx.Internal(w, nil, r.Context(), "list campuses", err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, campuses)
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"campuses": campuses, "total": total, "limit": limit, "offset": offset,
+	})
 }
 
 func (h *Handler) createCampus(w http.ResponseWriter, r *http.Request) {
@@ -246,12 +259,16 @@ func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
 		httpx.NotFound(w, "school not found")
 		return
 	}
-	members, err := h.svc.Members(r.Context(), id)
+	limit, offset := httpx.Pagination(r)
+	members, total, err := h.svc.Members(r.Context(), id, limit, offset)
 	if err != nil {
 		httpx.Internal(w, nil, r.Context(), "list members", err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, members)
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"members": members, "total": total, "limit": limit, "offset": offset,
+	})
 }
 
 func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) {

@@ -306,11 +306,11 @@ func TestLearnerTenantScoping(t *testing.T) {
 
 	assertLists := func(inA, inB bool) {
 		t.Helper()
-		listA, err := f.svc.ListLearners(ctx, schoolA.ID, "")
+		listA, _, err := f.svc.ListLearners(ctx, schoolA.ID, "", 100, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		listB, err := f.svc.ListLearners(ctx, schoolB.ID, "")
+		listB, _, err := f.svc.ListLearners(ctx, schoolB.ID, "", 100, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -571,5 +571,37 @@ func TestEnrollmentTransitionHTTP(t *testing.T) {
 	rr = do("GET", "/api/v1/enrollments?status=bogus", nil, true)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("bad status filter: status = %d", rr.Code)
+	}
+}
+
+// TestLearnerPagination guards the limit/offset + total contract (#26).
+func TestLearnerPagination(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	school := mustSchool(t, f, "PAGE-S", "Page School")
+
+	const n = 7
+	for i := 0; i < n; i++ {
+		l := mustLearner(t, f, school.ID, fmt.Sprintf("First%d", i), fmt.Sprintf("Last%02d", i))
+		if _, err := f.svc.EnrollLearner(ctx, school.ID, EnrollmentInput{LearnerID: l.ID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	page1, total, err := f.svc.ListLearners(ctx, school.ID, "", 3, 0)
+	if err != nil || len(page1) != 3 || total != n {
+		t.Fatalf("page1: %d items total=%d err=%v", len(page1), total, err)
+	}
+	page2, total2, err := f.svc.ListLearners(ctx, school.ID, "", 3, 3)
+	if err != nil || len(page2) != 3 || total2 != n {
+		t.Fatalf("page2: %d items total=%d err=%v", len(page2), total2, err)
+	}
+	page3, total3, err := f.svc.ListLearners(ctx, school.ID, "", 3, 6)
+	if err != nil || len(page3) != 1 || total3 != n {
+		t.Fatalf("page3: %d items total=%d err=%v", len(page3), total3, err)
+	}
+	// Pages do not overlap and preserve ordering.
+	if page1[0].ID == page2[0].ID {
+		t.Fatal("page overlap")
 	}
 }
