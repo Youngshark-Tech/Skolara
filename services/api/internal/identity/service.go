@@ -223,9 +223,31 @@ func (s *AuthService) PermissionsFor(ctx context.Context, userID string) (map[st
 	return s.repo.PermissionsForUser(ctx, userID)
 }
 
-// AssignRole grants a named role to a user.
+// AssignRole grants a named role to a user. Unknown roles are rejected with
+// ErrValidation (400) instead of a NULL not-null violation (500).
 func (s *AuthService) AssignRole(ctx context.Context, actorID, userID, roleName string) error {
-	return s.repo.AssignRole(ctx, userID, roleName)
+	ok, err := s.repo.RoleExists(ctx, roleName)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("%w: unknown role %q", ErrValidation, roleName)
+	}
+	if err := s.repo.AssignRole(ctx, userID, roleName); err != nil {
+		if isFKViolation(err) {
+			return fmt.Errorf("%w: user %s does not exist", ErrValidation, userID)
+		}
+		return err
+	}
+	return nil
+}
+
+func isFKViolation(err error) bool {
+	var pgErr interface{ SQLState() string }
+	if errors.As(err, &pgErr) {
+		return pgErr.SQLState() == "23503"
+	}
+	return false
 }
 
 // GetUser fetches a user by ID.

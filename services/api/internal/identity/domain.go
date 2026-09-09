@@ -57,6 +57,7 @@ type Repo interface {
 
 	RolesForUser(ctx context.Context, userID string) ([]string, error)
 	PermissionsForUser(ctx context.Context, userID string) (map[string]bool, error)
+	RoleExists(ctx context.Context, name string) (bool, error)
 	AssignRole(ctx context.Context, userID string, roleName string) error
 
 	CreateRefreshToken(ctx context.Context, rt *RefreshToken) error

@@ -259,6 +259,14 @@ func (h *Handler) handleAssignRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.AssignRole(r.Context(), ClaimsFrom(r.Context()).UserID, id, req.Role); err != nil {
+		if errors.Is(err, ErrValidation) {
+			httpx.BadRequest(w, err.Error())
+			return
+		}
+		if errors.Is(err, ErrNotFound) {
+			httpx.NotFound(w, "user not found")
+			return
+		}
 		httpx.Internal(w, nil, r.Context(), "assign role", err)
 		return
 	}

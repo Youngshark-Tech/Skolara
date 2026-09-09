@@ -25,6 +25,35 @@ var (
 	ErrNotAMember = errors.New("tenancy: no active membership for school")
 )
 
+// CreateGroup validates and creates an education group, emitting
+// tenancy.GroupCreated v1 (platform-scope event: no school_id).
+func (s *Service) CreateGroup(ctx context.Context, name, actorID string) (*EducationGroup, error) {
+	if name == "" || len(name) > 128 {
+		return nil, fmt.Errorf("%w: group name required (<=128 chars)", ErrValidation)
+	}
+	g := &EducationGroup{ID: newID(), Name: name}
+	if err := s.repo.CreateGroup(ctx, g); err != nil {
+		return nil, err
+	}
+	if s.pool != nil {
+		_, _ = events.Record(ctx, s.pool, nil, g.ID, "tenancy.GroupCreated", 1,
+			map[string]any{"name": g.Name, "actor_id": actorID})
+	}
+	return g, nil
+}
+
+// Groups lists education groups (admin surface).
+func (s *Service) Groups(ctx context.Context) ([]*EducationGroup, error) {
+	return s.repo.ListGroups(ctx)
+}
+
+// RoleExists reports whether a named role is seeded in the RBAC matrix.
+// Used to reject unknown role references with a 400 instead of a NULL
+// not-null violation surfacing as a 500.
+func (s *Service) RoleExists(ctx context.Context, name string) (bool, error) {
+	return s.repo.RoleExists(ctx, name)
+}
+
 // CreateSchool validates and creates a school (tenant root), seeding the
 // default institution ledger accounts (via finance hook when it lands) and
 // emitting tenancy.SchoolCreated.
@@ -83,12 +112,27 @@ func (s *Service) Campuses(ctx context.Context, schoolID string) ([]*Campus, err
 	return s.repo.ListCampuses(ctx, schoolID)
 }
 
-// AddMember grants a user a school-scoped role after validating the role exists.
+// AddMember grants a user a school-scoped role after validating the role
+// exists (400 otherwise) and mapping an unknown target user's FK violation
+// to a validation error instead of a 500.
 func (s *Service) AddMember(ctx context.Context, schoolID, userID, role string) error {
 	if role == "" {
 		return fmt.Errorf("%w: role required", ErrValidation)
 	}
+	if userID == "" {
+		return fmt.Errorf("%w: userId required", ErrValidation)
+	}
+	ok, err := s.repo.RoleExists(ctx, role)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("%w: unknown role %q", ErrValidation, role)
+	}
 	if err := s.repo.AddMember(ctx, &Membership{UserID: userID, SchoolID: schoolID, Role: role, Status: "active"}); err != nil {
+		if isFKViolation(err) {
+			return fmt.Errorf("%w: user %s does not exist", ErrValidation, userID)
+		}
 		return err
 	}
 	if s.pool != nil {
@@ -166,6 +210,14 @@ func isUniqueViolation(err error) bool {
 	var pgErr interface{ SQLState() string }
 	if errors.As(err, &pgErr) {
 		return pgErr.SQLState() == "23505"
+	}
+	return false
+}
+
+func isFKViolation(err error) bool {
+	var pgErr interface{ SQLState() string }
+	if errors.As(err, &pgErr) {
+		return pgErr.SQLState() == "23503"
 	}
 	return false
 }
