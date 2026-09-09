@@ -21,6 +21,8 @@ const (
 	PermAttendanceRecord = "attendance.record"
 	PermAssignmentRead   = "assignment.read"
 	PermAssignmentManage = "assignment.manage"
+	PermFinanceRead      = "finance.read"
+	PermFinanceManage    = "finance.manage"
 	PermStudentRead      = "student.read"
 	PermStudentManage    = "student.manage"
 )
