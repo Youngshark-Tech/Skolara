@@ -158,3 +158,64 @@ func TestAssignRoleReferenceErrors(t *testing.T) {
 		t.Fatalf("valid assignment: %v", err)
 	}
 }
+
+// TestUserLifecycleDisableEnable covers the admin lifecycle flow: disable
+// revokes every refresh token (session teardown), login is refused while
+// disabled, and re-enable restores access.
+func TestUserLifecycleDisableEnable(t *testing.T) {
+	svc, _ := newAuthService(t)
+	ctx := context.Background()
+
+	admin, err := svc.CreateUser(ctx, "lifecycle-admin@skolara.test", "Admin", "s3cure-passw0rd!", "platform_admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := svc.CreateUser(ctx, "lifecycle-user@skolara.test", "User", "s3cure-passw0rd!", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	access, refresh, err := svc.Login(ctx, u.Email, "s3cure-passw0rd!", "127.0.0.1")
+	if err != nil || access == "" || refresh == "" {
+		t.Fatalf("login before disable: %v", err)
+	}
+
+	disabled, err := svc.SetUserStatus(ctx, admin.ID, u.ID, "disabled")
+	if err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if disabled.Status != StatusDisabled {
+		t.Fatalf("status = %s", disabled.Status)
+	}
+
+	// Existing refresh token must be dead.
+	if _, _, err := svc.Refresh(ctx, refresh, "127.0.0.1"); err == nil {
+		t.Fatal("refresh after disable succeeded — session teardown broken")
+	}
+	// Login refused while disabled.
+	if _, _, err := svc.Login(ctx, u.Email, "s3cure-passw0rd!", "127.0.0.1"); err == nil {
+		t.Fatal("login after disable succeeded")
+	}
+	// Invalid status value rejected.
+	if _, err := svc.SetUserStatus(ctx, admin.ID, u.ID, "locked_permanently"); err == nil {
+		t.Fatal("invalid status accepted")
+	}
+	// Unknown user -> 404 semantics.
+	if _, err := svc.SetUserStatus(ctx, admin.ID, "00000000-0000-0000-0000-000000000004", "disabled"); err == nil {
+		t.Fatal("unknown user accepted")
+	}
+
+	// Re-enable restores login.
+	enabled, err := svc.SetUserStatus(ctx, admin.ID, u.ID, "active")
+	if err != nil || enabled.Status != StatusActive {
+		t.Fatalf("re-enable: %v %s", err, enabled.Status)
+	}
+	if _, _, err := svc.Login(ctx, u.Email, "s3cure-passw0rd!", "127.0.0.1"); err != nil {
+		t.Fatalf("login after re-enable: %v", err)
+	}
+
+	// Idempotent set to the same status is a no-op.
+	if _, err := svc.SetUserStatus(ctx, admin.ID, u.ID, "active"); err != nil {
+		t.Fatalf("idempotent status set: %v", err)
+	}
+}
