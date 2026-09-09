@@ -1,0 +1,1813 @@
+openapi: 3.1.0
+info:
+  title: Skolara API
+  version: 1.0.0
+  description: |
+    Skolara — The Intelligent Operating System for Schools.
+
+    Conventions:
+    - Versioned paths (`/api/v1/…`)
+    - Consistent error envelope (`error.code` / `error.message` / `error.details`)
+    - `X-Request-ID` propagated to logs and audit
+    - `Idempotency-Key` supported on financial mutations (journal entries); payment
+      webhooks are idempotent by provider event id
+    - Authorization enforced server-side; tenant context derived from the
+      verified session (X-School-ID of an ACTIVE membership), never from payloads
+    - Amounts are INTEGER minor units (e.g. KES cents) — floats never
+servers:
+  - url: http://localhost:8080
+    description: Local development
+tags:
+  - name: system
+  - name: auth
+  - name: users
+  - name: tenancy
+  - name: students
+  - name: academics
+  - name: attendance
+  - name: assignments
+  - name: finance
+paths:
+  /healthz:
+    get:
+      tags: [system]
+      summary: Liveness probe
+      operationId: healthz
+      responses:
+        "200": { description: Service alive }
+  /readyz:
+    get:
+      tags: [system]
+      summary: Readiness probe (checks dependencies)
+      operationId: readyz
+      responses:
+        "200": { description: Ready }
+        "503": { description: Dependencies unavailable }
+  /metrics:
+    get:
+      tags: [system]
+      summary: Prometheus metrics
+      operationId: metrics
+      responses:
+        "200": { description: Metrics in Prometheus text format }
+
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      summary: Login with email+password (sets rotating refresh cookie)
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: Access token issued (refresh token in HttpOnly cookie)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken: { type: string }
+                  tokenType: { type: string, const: Bearer }
+                  expiresIn: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "423": { $ref: "#/components/responses/Conflict" }
+  /api/v1/auth/refresh:
+    post:
+      tags: [auth]
+      summary: Rotate refresh token (cookie or body) into a new access token
+      operationId: refreshToken
+      responses:
+        "200": { description: New access + refresh tokens }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoke the presented refresh token (idempotent)
+      operationId: logout
+      responses:
+        "204": { description: Logged out }
+  /api/v1/me:
+    get:
+      tags: [auth]
+      summary: Current user with effective permission set
+      operationId: me
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserWithPermissions" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/users:
+    get:
+      tags: [users]
+      summary: List users (paginated)
+      operationId: listUsers
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 100 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: User page
+          headers: { X-Total-Count: { $ref: "#/components/headers/TotalCount" } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users: { type: array, items: { $ref: "#/components/schemas/User" } }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [users]
+      summary: Provision a user (admin flow)
+      operationId: createUser
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, name, password]
+              properties:
+                email: { type: string }
+                name: { type: string }
+                password: { type: string, minLength: 8 }
+                role: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/users/{id}:
+    get:
+      tags: [users]
+      summary: Fetch a user
+      operationId: getUser
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: User
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/users/{id}/roles:
+    post:
+      tags: [users]
+      summary: Grant a platform role to a user
+      operationId: assignRole
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string }
+      responses:
+        "204": { description: Assigned }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/users/{id}/status:
+    patch:
+      tags: [users]
+      summary: Enable/disable an account (disabling revokes all sessions)
+      operationId: setUserStatus
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [active, disabled] }
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/education-groups:
+    get:
+      tags: [tenancy]
+      summary: List education groups
+      operationId: listEducationGroups
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Groups
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/EducationGroup" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [tenancy]
+      summary: Create an education group
+      operationId: createEducationGroup
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 128 }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EducationGroup" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/schools:
+    get:
+      tags: [tenancy]
+      summary: List schools (platform admins see all; others see active memberships)
+      operationId: listSchools
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: groupId, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: Schools
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schools: { type: array, items: { $ref: "#/components/schemas/School" } }
+                  total: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [tenancy]
+      summary: Create a school (tenant root)
+      operationId: createSchool
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name]
+              properties:
+                code: { type: string, maxLength: 32 }
+                name: { type: string }
+                groupId: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/School" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/schools/{id}:
+    get:
+      tags: [tenancy]
+      summary: Fetch a school (404 when not a member)
+      operationId: getSchool
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: School
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/School" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/schools/{id}/campuses:
+    get:
+      tags: [tenancy]
+      summary: List a school's campuses
+      operationId: listCampuses
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Campuses
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  campuses: { type: array, items: { $ref: "#/components/schemas/Campus" } }
+                  total: { type: integer }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [tenancy]
+      summary: Create a campus
+      operationId: createCampus
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name]
+              properties:
+                code: { type: string }
+                name: { type: string }
+                location: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Campus" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/schools/{id}/members:
+    get:
+      tags: [tenancy]
+      summary: List a school's members
+      operationId: listSchoolMembers
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Members
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  members: { type: array, items: { $ref: "#/components/schemas/Membership" } }
+                  total: { type: integer }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [tenancy]
+      summary: Grant a user a school-scoped role
+      operationId: addSchoolMember
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, role]
+              properties:
+                userId: { type: string, format: uuid }
+                role: { type: string }
+      responses:
+        "204": { description: Granted }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/me/memberships:
+    get:
+      tags: [tenancy]
+      summary: The caller's school memberships
+      operationId: myMemberships
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Memberships
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Membership" }
+
+  /api/v1/learners:
+    get:
+      tags: [students]
+      summary: List learners enrolled at the acting school (paginated, name search)
+      operationId: listLearners
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: Learner page
+          headers: { X-Total-Count: { $ref: "#/components/headers/TotalCount" } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  learners: { type: array, items: { $ref: "#/components/schemas/Learner" } }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [students]
+      summary: Provision a learner identity (global, not tenant-scoped)
+      operationId: createLearner
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [firstName, lastName]
+              properties:
+                firstName: { type: string, maxLength: 100 }
+                lastName: { type: string, maxLength: 100 }
+                middleName: { type: string }
+                dateOfBirth: { type: string, format: date-time }
+                gender: { type: string }
+                externalId: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Learner" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/learners/{id}:
+    get:
+      tags: [students]
+      summary: Resolve a learner (only via enrollment at the acting school)
+      operationId: getLearner
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Learner
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Learner" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/guardians:
+    post:
+      tags: [students]
+      summary: Provision a guardian
+      operationId: createGuardian
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [firstName, lastName]
+              properties:
+                firstName: { type: string }
+                lastName: { type: string }
+                phone: { type: string }
+                email: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Guardian" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/learners/{id}/guardians:
+    get:
+      tags: [students]
+      summary: List a learner's guardian links (with guardian identity)
+      operationId: listLearnerGuardians
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Guardian links
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/GuardianLinkView" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [students]
+      summary: Link a guardian to a learner
+      operationId: linkGuardian
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [guardianId, relationship]
+              properties:
+                guardianId: { type: string, format: uuid }
+                relationship: { type: string, enum: [mother, father, guardian, other] }
+                isPrimary: { type: boolean }
+                canViewFinancials: { type: boolean }
+                canViewAcademics: { type: boolean }
+      responses:
+        "201":
+          description: Linked
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GuardianLink" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/enrollments:
+    get:
+      tags: [students]
+      summary: List enrollments at the acting school (paginated)
+      operationId: listEnrollments
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/EnrollmentStatus" } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: Enrollment page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enrollments: { type: array, items: { $ref: "#/components/schemas/Enrollment" } }
+                  total: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+    post:
+      tags: [students]
+      summary: Enroll a learner (applicant or admitted)
+      operationId: createEnrollment
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [learnerId]
+              properties:
+                learnerId: { type: string, format: uuid }
+                classGroupId: { type: string, format: uuid }
+                academicYearId: { type: string, format: uuid }
+                status: { type: string, enum: [applicant, admitted] }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Enrollment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/enrollments/{id}/transition:
+    post:
+      tags: [students]
+      summary: Move an enrollment through its lifecycle state machine
+      operationId: transitionEnrollment
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to]
+              properties:
+                to: { $ref: "#/components/schemas/EnrollmentStatus" }
+      responses:
+        "200":
+          description: Updated enrollment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Enrollment" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/academic-years:
+    get:
+      tags: [academics]
+      summary: List academic years
+      operationId: listAcademicYears
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Years
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AcademicYear" }
+    post:
+      tags: [academics]
+      summary: Create an academic year
+      operationId: createAcademicYear
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, startDate, endDate]
+              properties:
+                name: { type: string }
+                startDate: { type: string, format: date }
+                endDate: { type: string, format: date }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AcademicYear" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/academic-years/{id}:
+    get:
+      tags: [academics]
+      summary: Fetch an academic year
+      operationId: getAcademicYear
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Year
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AcademicYear" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/academic-years/{id}/terms:
+    get:
+      tags: [academics]
+      summary: List a year's terms
+      operationId: listTerms
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Terms
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Term" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/terms:
+    post:
+      tags: [academics]
+      summary: Create a term (must nest in its year; no sibling overlap)
+      operationId: createTerm
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [academicYearId, name, startDate, endDate]
+              properties:
+                academicYearId: { type: string, format: uuid }
+                name: { type: string }
+                startDate: { type: string, format: date }
+                endDate: { type: string, format: date }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Term" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/subjects:
+    get:
+      tags: [academics]
+      summary: List subjects
+      operationId: listSubjects
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Subjects
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Subject" }
+    post:
+      tags: [academics]
+      summary: Create a subject (code unique per school)
+      operationId: createSubject
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name]
+              properties:
+                code: { type: string, maxLength: 32 }
+                name: { type: string, maxLength: 128 }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Subject" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/classes:
+    get:
+      tags: [academics]
+      summary: List class groups (optional yearId filter)
+      operationId: listClasses
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: yearId, in: query, schema: { type: string } }]
+      responses:
+        "200":
+          description: Classes
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ClassGroup" }
+    post:
+      tags: [academics]
+      summary: Create a class group (name unique per school+year)
+      operationId: createClass
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [academicYearId, name]
+              properties:
+                academicYearId: { type: string, format: uuid }
+                name: { type: string, maxLength: 100 }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClassGroup" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/classes/{id}/roster:
+    get:
+      tags: [academics]
+      summary: List a class's roster (learner identities joined)
+      operationId: listRoster
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Roster
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RosterEntryView" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [academics]
+      summary: Bulk-seat learners (idempotent, 1..500 ids)
+      operationId: addRoster
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [learnerIds]
+              properties:
+                learnerIds:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "204": { description: Seated }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/classes/{id}/teachers:
+    get:
+      tags: [academics]
+      summary: List a class's teaching assignments
+      operationId: listClassTeachers
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Assignments
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TeachingAssignmentView" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [academics]
+      summary: Assign a teacher to class+subject (unique per pair)
+      operationId: assignClassTeacher
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subjectId, teacherId]
+              properties:
+                subjectId: { type: string, format: uuid }
+                teacherId: { type: string, format: uuid }
+      responses:
+        "201":
+          description: Assigned
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TeachingAssignment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/attendance/sessions:
+    get:
+      tags: [attendance]
+      summary: List attendance sessions (class/date filters, paginated)
+      operationId: listAttendanceSessions
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: classGroupId, in: query, schema: { type: string } }
+        - { name: date, in: query, schema: { type: string, format: date } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: Sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions: { type: array, items: { $ref: "#/components/schemas/AttendanceSession" } }
+                  total: { type: integer }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [attendance]
+      summary: Open (or converge on) the session for class+date — retry-safe
+      operationId: openAttendanceSession
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [classGroupId, date]
+              properties:
+                classGroupId: { type: string, format: uuid }
+                date: { type: string, format: date }
+      responses:
+        "200":
+          description: The session (pre-existing sessions return 200 with the same id)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttendanceSession" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/attendance/sessions/{id}/records:
+    get:
+      tags: [attendance]
+      summary: List a session's records
+      operationId: listAttendanceRecords
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  records: { type: array, items: { $ref: "#/components/schemas/AttendanceRecord" } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [attendance]
+      summary: Bulk-upsert records (idempotent by clientMutationId, 1..500)
+      description: |
+        Offline-tolerant: replays with the same clientMutationId are no-ops;
+        corrections with a new mutation id update the row; the row keeps its
+        FIRST mutation id as the replay key. Emits attendance.AbsenceRecorded.v1
+        per absent outcome.
+      operationId: submitAttendanceRecords
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [records]
+              properties:
+                records:
+                  type: array
+                  maxItems: 500
+                  items:
+                    type: object
+                    required: [learnerId, status, clientMutationId]
+                    properties:
+                      learnerId: { type: string, format: uuid }
+                      status: { type: string, enum: [present, absent, late, excused] }
+                      reason: { type: string, maxLength: 200 }
+                      clientMutationId: { type: string, maxLength: 128 }
+      responses:
+        "204": { description: Applied }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Session closed }
+  /api/v1/attendance/sessions/{id}/close:
+    post:
+      tags: [attendance]
+      summary: Close a session (finalizes the roll call)
+      operationId: closeAttendanceSession
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Closed session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttendanceSession" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/assignments:
+    get:
+      tags: [assignments]
+      summary: List assignments (class/status filters, paginated)
+      operationId: listAssignments
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: classGroupId, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [draft, published, closed] } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: Assignments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  assignments: { type: array, items: { $ref: "#/components/schemas/Assignment" } }
+                  total: { type: integer }
+    post:
+      tags: [assignments]
+      summary: Create a DRAFT assignment (creator becomes the owning teacher)
+      operationId: createAssignment
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [classGroupId, subjectId, title]
+              properties:
+                classGroupId: { type: string, format: uuid }
+                subjectId: { type: string, format: uuid }
+                title: { type: string, maxLength: 200 }
+                instructions: { type: string }
+                dueDate: { type: string, format: date }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Assignment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/assignments/{id}:
+    get:
+      tags: [assignments]
+      summary: Fetch an assignment
+      operationId: getAssignment
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Assignment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Assignment" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/assignments/{id}/publish:
+    post:
+      tags: [assignments]
+      summary: Publish (owner only; due date must not be in the past)
+      operationId: publishAssignment
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Published
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Assignment" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/assignments/{id}/close:
+    post:
+      tags: [assignments]
+      summary: Close (owner only; stops submissions)
+      operationId: closeAssignment
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Closed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Assignment" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/assignments/{id}/submissions:
+    get:
+      tags: [assignments]
+      summary: List submissions
+      operationId: listSubmissions
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Submissions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  submissions: { type: array, items: { $ref: "#/components/schemas/Submission" } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [assignments]
+      summary: Submit (assignment published; learner rostered; resubmit while ungraded)
+      operationId: submitAssignment
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [learnerId]
+              properties:
+                learnerId: { type: string, format: uuid }
+                content: { type: string }
+      responses:
+        "201":
+          description: Submitted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Submission" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/assignments/{id}/submissions/{learnerId}/grade:
+    post:
+      tags: [assignments]
+      summary: Grade a submitted response (owner only)
+      operationId: gradeSubmission
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - { name: learnerId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [grade]
+              properties:
+                grade: { type: string }
+                feedback: { type: string }
+      responses:
+        "200":
+          description: Graded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Submission" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/assignments/{id}/submissions/{learnerId}/return:
+    post:
+      tags: [assignments]
+      summary: Return graded work (owner only; graded -> returned)
+      operationId: returnSubmission
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - { name: learnerId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Returned
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Submission" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/ledger/accounts:
+    get:
+      tags: [finance]
+      summary: Chart of accounts (seeded lazily per school)
+      operationId: listLedgerAccounts
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts: { type: array, items: { $ref: "#/components/schemas/LedgerAccount" } }
+    post:
+      tags: [finance]
+      summary: Register an extra account
+      operationId: createLedgerAccount
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name, type]
+              properties:
+                code: { type: string }
+                name: { type: string }
+                type: { type: string, enum: [ASSET, LIABILITY, EQUITY, REVENUE, EXPENSE] }
+                purpose: { type: string, enum: [main, fees, payroll, transport, meals, activities, reserve, ""] }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LedgerAccount" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/journal-entries:
+    post:
+      tags: [finance]
+      summary: Post a balanced journal entry (>= 2 lines; optional idempotencyKey)
+      description: |
+        Immutable once posted. Corrections reference the original via
+        correctionOf (compensating entry). Replaying an idempotencyKey returns
+        the original entry with zero new postings.
+      operationId: postJournalEntry
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lines]
+              properties:
+                description: { type: string }
+                entryDate: { type: string, format: date }
+                idempotencyKey: { type: string }
+                correctionOf: { type: string, format: uuid }
+                lines:
+                  type: array
+                  minItems: 2
+                  items:
+                    type: object
+                    required: [accountId]
+                    properties:
+                      accountId: { type: string, format: uuid }
+                      debitMinor: { type: integer, minimum: 0 }
+                      creditMinor: { type: integer, minimum: 0 }
+      responses:
+        "201":
+          description: Posted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JournalEntry" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/journal-entries/{id}:
+    get:
+      tags: [finance]
+      summary: Fetch an entry with its lines
+      operationId: getJournalEntry
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Entry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JournalEntry" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/fee-structures:
+    get:
+      tags: [finance]
+      summary: List fee structures
+      operationId: listFeeStructures
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Fee structures
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  feeStructures: { type: array, items: { $ref: "#/components/schemas/FeeStructure" } }
+    post:
+      tags: [finance]
+      summary: Create a fee structure
+      operationId: createFeeStructure
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, amountMinor]
+              properties:
+                name: { type: string }
+                classGroupId: { type: string, format: uuid, nullable: true }
+                academicYearId: { type: string, format: uuid, nullable: true }
+                termId: { type: string, format: uuid, nullable: true }
+                amountMinor: { type: integer, minimum: 1 }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FeeStructure" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/invoices:
+    get:
+      tags: [finance]
+      summary: List invoices (status/learner filters, paginated)
+      operationId: listInvoices
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [open, partially_paid, paid, void] } }
+        - { name: learnerId, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: Invoice page
+          headers: { X-Total-Count: { $ref: "#/components/headers/TotalCount" } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  invoices: { type: array, items: { $ref: "#/components/schemas/Invoice" } }
+                  total: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+    post:
+      tags: [finance]
+      summary: Create an invoice (>= 1 positive lines; total derived)
+      operationId: createInvoice
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [learnerId, dueDate, lines]
+              properties:
+                learnerId: { type: string, format: uuid }
+                feeStructureId: { type: string, format: uuid }
+                termId: { type: string, format: uuid }
+                dueDate: { type: string, format: date }
+                lines:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [amountMinor]
+                    properties:
+                      description: { type: string }
+                      amountMinor: { type: integer, minimum: 1 }
+      responses:
+        "201":
+          description: Created (emits finance.InvoiceCreated.v1)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invoice" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/invoices/{id}:
+    get:
+      tags: [finance]
+      summary: Fetch an invoice with derived totals
+      operationId: getInvoice
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Invoice
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invoice" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/invoices/{id}/void:
+    post:
+      tags: [finance]
+      summary: Void an unallocated invoice
+      operationId: voidInvoice
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Voided
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invoice" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/payments:
+    post:
+      tags: [finance]
+      summary: Record a payment intent (pending; confirmation is webhook-only)
+      operationId: createPayment
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amountMinor, provider, providerRef]
+              properties:
+                invoiceId: { type: string, format: uuid }
+                payerRef: { type: string }
+                amountMinor: { type: integer, minimum: 1 }
+                provider: { type: string }
+                providerRef: { type: string }
+      responses:
+        "201":
+          description: Recorded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/payments/webhooks:
+    post:
+      tags: [finance]
+      summary: Provider webhook (PUBLIC; HMAC-SHA256 signature required)
+      description: |
+        Signature header: `X-Skolar-Signature: hex(HMAC-SHA256(raw_body, webhook_secret))`.
+        Idempotent by eventId: replays return the stored result with zero new
+        postings. Confirmation is atomic: CAS pending->confirmed, ledger posting
+        (debit wallet_main / credit fees_receivable), invoice allocation,
+        PaymentConfirmed + ReceiptIssued events.
+      operationId: paymentWebhook
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [schoolId, eventId, paymentId, status]
+              properties:
+                schoolId: { type: string, format: uuid }
+                eventId: { type: string }
+                paymentId: { type: string, format: uuid }
+                status: { type: string, enum: [confirmed, failed] }
+                providerRef: { type: string }
+      responses:
+        "200":
+          description: Applied (or replayed)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  paymentId: { type: string }
+                  status: { type: string }
+                  replayed: { type: boolean }
+                  invoiceStatus: { type: string }
+        "401": { description: Invalid signature }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/wallet:
+    get:
+      tags: [finance]
+      summary: Institution wallet — derived balances per purpose (ADR-005)
+      operationId: getWallet
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Wallet balances
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  wallet:
+                    type: array
+                    items: { $ref: "#/components/schemas/WalletBalance" }
+
+components:
+  headers:
+    TotalCount:
+      description: Total number of records matching the query
+      schema: { type: integer }
+  parameters:
+    IdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    BadRequest:
+      description: Validation failed
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Forbidden:
+      description: Missing permission or school context
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    NotFound:
+      description: Resource not found (also used cross-tenant to avoid enumeration)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Conflict:
+      description: Domain conflict (state machine, uniqueness, overlap)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+  schemas:
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  issue: { type: string }
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        name: { type: string }
+        status: { type: string, enum: [active, disabled, locked] }
+    UserWithPermissions:
+      allOf:
+        - $ref: "#/components/schemas/User"
+        - type: object
+          properties:
+            roles: { type: array, items: { type: string } }
+            permissions:
+              type: object
+              additionalProperties: { type: boolean }
+    EducationGroup:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    School:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        groupId: { type: string, format: uuid, nullable: true }
+        status: { type: string, enum: [active, inactive, archived] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    Campus:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        location: { type: string }
+    Membership:
+      type: object
+      properties:
+        userId: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        role: { type: string }
+        status: { type: string, enum: [active, suspended] }
+    Learner:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        firstName: { type: string }
+        lastName: { type: string }
+        middleName: { type: string, nullable: true }
+        dateOfBirth: { type: string, format: date-time, nullable: true }
+        gender: { type: string }
+        externalId: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+    Guardian:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        firstName: { type: string }
+        lastName: { type: string }
+        phone: { type: string }
+        email: { type: string }
+        createdAt: { type: string, format: date-time }
+    GuardianLink:
+      type: object
+      properties:
+        guardianId: { type: string, format: uuid }
+        learnerId: { type: string, format: uuid }
+        relationship: { type: string }
+        isPrimary: { type: boolean }
+        canViewFinancials: { type: boolean }
+        canViewAcademics: { type: boolean }
+    GuardianLinkView:
+      type: object
+      properties:
+        link: { $ref: "#/components/schemas/GuardianLink" }
+        guardian: { $ref: "#/components/schemas/Guardian" }
+    EnrollmentStatus:
+      type: string
+      enum: [applicant, admitted, active, suspended, transfer_pending, transferred_out, alumni, withdrawn, graduated]
+    Enrollment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        learnerId: { type: string, format: uuid }
+        classGroupId: { type: string, format: uuid, nullable: true }
+        academicYearId: { type: string, format: uuid, nullable: true }
+        status: { $ref: "#/components/schemas/EnrollmentStatus" }
+        startedAt: { type: string, format: date-time, nullable: true }
+        endedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+    AcademicYear:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        name: { type: string }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        status: { type: string, enum: [planning, active, closed] }
+        createdAt: { type: string, format: date-time }
+    Term:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        academicYearId: { type: string, format: uuid }
+        name: { type: string }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        createdAt: { type: string, format: date-time }
+    Subject:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+    ClassGroup:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        academicYearId: { type: string, format: uuid }
+        name: { type: string }
+    RosterEntryView:
+      type: object
+      properties:
+        learnerId: { type: string, format: uuid }
+        firstName: { type: string }
+        lastName: { type: string }
+        externalId: { type: string, nullable: true }
+    TeachingAssignment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        classGroupId: { type: string, format: uuid }
+        subjectId: { type: string, format: uuid }
+        teacherId: { type: string, format: uuid }
+    TeachingAssignmentView:
+      type: object
+      properties:
+        assignment: { $ref: "#/components/schemas/TeachingAssignment" }
+        teacher:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            email: { type: string }
+        subject:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            code: { type: string }
+            name: { type: string }
+    AttendanceSession:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        classGroupId: { type: string, format: uuid }
+        date: { type: string, format: date }
+        status: { type: string, enum: [open, closed] }
+        createdBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+    AttendanceRecord:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid }
+        learnerId: { type: string, format: uuid }
+        status: { type: string, enum: [present, absent, late, excused] }
+        reason: { type: string }
+        recordedBy: { type: string, format: uuid }
+        clientMutationId: { type: string }
+        recordedAt: { type: string, format: date-time }
+    Assignment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        classGroupId: { type: string, format: uuid }
+        subjectId: { type: string, format: uuid }
+        teacherId: { type: string, format: uuid }
+        title: { type: string }
+        instructions: { type: string }
+        dueDate: { type: string, format: date, nullable: true }
+        status: { type: string, enum: [draft, published, closed] }
+        publishedAt: { type: string, format: date-time, nullable: true }
+        closedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+    Submission:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        assignmentId: { type: string, format: uuid }
+        learnerId: { type: string, format: uuid }
+        content: { type: string }
+        status: { type: string, enum: [submitted, graded, returned] }
+        grade: { type: string, nullable: true }
+        feedback: { type: string }
+        submittedAt: { type: string, format: date-time }
+        gradedAt: { type: string, format: date-time, nullable: true }
+        returnedAt: { type: string, format: date-time, nullable: true }
+    LedgerAccount:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [ASSET, LIABILITY, EQUITY, REVENUE, EXPENSE] }
+        purpose: { type: string }
+        currency: { type: string }
+        createdAt: { type: string, format: date-time }
+    JournalEntry:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        entryDate: { type: string, format: date }
+        description: { type: string }
+        source: { type: string, enum: [manual, payment, correction] }
+        sourceRef: { type: string }
+        actorId: { type: string }
+        correlationId: { type: string }
+        createdAt: { type: string, format: date-time }
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              entryId: { type: string, format: uuid }
+              accountId: { type: string, format: uuid }
+              debitMinor: { type: integer }
+              creditMinor: { type: integer }
+    FeeStructure:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        name: { type: string }
+        classGroupId: { type: string, format: uuid, nullable: true }
+        academicYearId: { type: string, format: uuid, nullable: true }
+        termId: { type: string, format: uuid, nullable: true }
+        amountMinor: { type: integer }
+        currency: { type: string }
+        createdAt: { type: string, format: date-time }
+    Invoice:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        learnerId: { type: string, format: uuid }
+        feeStructureId: { type: string, format: uuid, nullable: true }
+        termId: { type: string, format: uuid, nullable: true }
+        dueDate: { type: string, format: date }
+        currency: { type: string }
+        status: { type: string, enum: [open, partially_paid, paid, void] }
+        totalMinor: { type: integer }
+        paidMinor: { type: integer }
+        balanceMinor: { type: integer }
+        createdAt: { type: string, format: date-time }
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              invoiceId: { type: string, format: uuid }
+              description: { type: string }
+              amountMinor: { type: integer }
+    Payment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        invoiceId: { type: string, format: uuid, nullable: true }
+        payerRef: { type: string }
+        amountMinor: { type: integer }
+        currency: { type: string }
+        provider: { type: string }
+        providerRef: { type: string }
+        status: { type: string, enum: [pending, confirmed, failed] }
+        createdAt: { type: string, format: date-time }
+        confirmedAt: { type: string, format: date-time, nullable: true }
+    WalletBalance:
+      type: object
+      properties:
+        purpose: { type: string, enum: [main, fees, payroll, transport, meals, activities, reserve] }
+        accountId: { type: string, format: uuid }
+        currency: { type: string }
+        balanceMinor: { type: integer }
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
