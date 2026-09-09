@@ -16,15 +16,18 @@ import (
 
 // Handler exposes identity endpoints.
 type Handler struct {
-	svc  *AuthService
-	jwt  *JWTManager
-	pool *postgres.Pool
+	svc           *AuthService
+	jwt           *JWTManager
+	pool          *postgres.Pool
+	secureCookies bool
 }
 
 // NewHandler builds the identity HTTP handler. The pool is provided by the
-// composition root so handlers can emit outbox events.
-func NewHandler(svc *AuthService, jwt *JWTManager, pool *postgres.Pool) *Handler {
-	return &Handler{svc: svc, jwt: jwt, pool: pool}
+// composition root so handlers can emit outbox events. secureCookies gates
+// the Secure attribute of the refresh cookie (true in production HTTPS
+// deployments; false so local plain-HTTP browsers store the cookie).
+func NewHandler(svc *AuthService, jwt *JWTManager, pool *postgres.Pool, secureCookies bool) *Handler {
+	return &Handler{svc: svc, jwt: jwt, pool: pool, secureCookies: secureCookies}
 }
 
 const refreshCookieName = "skolara_refresh"
@@ -72,7 +75,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.auditLogin(r, "", req.Email, nil)
-	setRefreshCookie(w, refresh)
+	h.setRefreshCookie(w, refresh)
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"accessToken": access,
 		"tokenType":   "Bearer",
@@ -124,7 +127,7 @@ func (h *Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		httpx.Unauthorized(w, "invalid refresh token")
 		return
 	}
-	setRefreshCookie(w, newRefresh)
+	h.setRefreshCookie(w, newRefresh)
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"accessToken": access,
 		"tokenType":   "Bearer",
@@ -147,7 +150,7 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	unsetRefreshCookie(w)
+	h.unsetRefreshCookie(w)
 	_ = h.svc.Audit(r.Context(), AuditEntry{Action: "auth.logout", ResourceType: "session", ResourceID: "self"})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -375,22 +378,22 @@ func withClaims(ctx context.Context, c *SessionClaims) context.Context {
 
 // --- helpers ------------------------------------------------------------------
 
-func setRefreshCookie(w http.ResponseWriter, token string) {
+func (h *Handler) setRefreshCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     refreshCookieName,
 		Value:    token,
 		Path:     "/api/v1/auth",
 		Expires:  time.Now().Add(RefreshTokenExpiry),
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   h.secureCookies,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
 
-func unsetRefreshCookie(w http.ResponseWriter) {
+func (h *Handler) unsetRefreshCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name: refreshCookieName, Value: "", Path: "/api/v1/auth",
-		MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+		MaxAge: -1, HttpOnly: true, Secure: h.secureCookies, SameSite: http.SameSiteLaxMode,
 	})
 }
 

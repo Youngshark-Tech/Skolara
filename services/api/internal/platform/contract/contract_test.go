@@ -81,7 +81,7 @@ func buildRouter() *http.ServeMux {
 	jwt := identity.NewJWTManager("drift-check-secret-0123456789abcdef0123456789abcdef", 1<<30)
 	var resolver identity.PermissionResolver = nilResolver{}
 
-	idHandler := identity.NewHandler(identity.NewAuthService(identity.NewRepo(nil), jwt), jwt, nil)
+	idHandler := identity.NewHandler(identity.NewAuthService(identity.NewRepo(nil), jwt), jwt, nil, false)
 	tenHandler := tenancy.NewHandler(tenancy.NewService(tenancy.NewRepo(nil), nil))
 	stuHandler := students.NewHandler(students.NewService(students.NewRepo(nil), nil))
 	acaHandler := academics.NewHandler(academics.NewService(academics.NewRepo(nil), nil))
@@ -91,11 +91,14 @@ func buildRouter() *http.ServeMux {
 
 	idHandler.Register(root)
 	tenHandler.Register(root, jwt, resolver)
-	stuHandler.Register(root, jwt, resolver)
-	acaHandler.Register(root, jwt, resolver)
-	attHandler.Register(root, jwt, resolver)
-	asgHandler.Register(root, jwt, resolver)
-	finHandler.Register(root, jwt, resolver)
+
+	schoolMux := http.NewServeMux()
+	stuHandler.Register(schoolMux, jwt, resolver)
+	acaHandler.Register(schoolMux, jwt, resolver)
+	attHandler.Register(schoolMux, jwt, resolver)
+	asgHandler.Register(schoolMux, jwt, resolver)
+	finHandler.Register(schoolMux, jwt, resolver)
+	root.Handle("/api/v1/", identity.RequireAuth(jwt, tenancy.RequireSchool(tenancy.NewService(tenancy.NewRepo(nil), nil), schoolMux)))
 	finHandler.RegisterWebhook(root)
 
 	root.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
