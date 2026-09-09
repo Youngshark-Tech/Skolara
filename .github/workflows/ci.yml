@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: Secret Scanning (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  api:
+    name: API — Vet, Build, Unit Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: services/api/go.sum
+      - name: Check formatting
+        run: |
+          test -f go.mod || { echo "services/api not bootstrapped yet — skipping"; exit 0; }
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
+      - name: Vet
+        run: |
+          test -f go.mod || exit 0
+          go vet ./...
+      - name: Build
+        run: |
+          test -f go.mod || exit 0
+          go build ./...
+      - name: Unit tests
+        run: |
+          test -f go.mod || exit 0
+          go test -race -count=1 -coverprofile=coverage.out ./...
+      - name: Upload coverage
+        if: hashFiles('services/api/coverage.out') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-coverage
+          path: services/api/coverage.out
+
+  api-integration:
+    name: API — Integration Tests (Postgres)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: skolara
+          POSTGRES_PASSWORD: skolara_test
+          POSTGRES_DB: skolara_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U skolara"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://skolara:skolara_test@localhost:5432/skolara_test?sslmode=disable
+      TEST_DATABASE_URL: postgres://skolara:skolara_test@localhost:5432/skolara_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: services/api/go.sum
+      - name: Integration tests
+        run: |
+          test -f go.mod || { echo "services/api not bootstrapped yet — skipping"; exit 0; }
+          go test -race -count=1 -tags=integration ./...
+
+  api-vuln:
+    name: API — Vulnerability Check (govulncheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: govulncheck
+        run: |
+          if [ ! -f services/api/go.mod ]; then echo "not bootstrapped — skipping"; exit 0; fi
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          cd services/api && govulncheck ./...
+
+  web:
+    name: Web — Lint, Typecheck, Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install
+        run: |
+          test -f package.json || { echo "apps/web not bootstrapped yet — skipping"; exit 0; }
+          npm ci
+      - name: Lint
+        run: |
+          test -f package.json || exit 0
+          npm run lint
+      - name: Typecheck
+        run: |
+          test -f package.json || exit 0
+          npm run typecheck
+      - name: Unit tests
+        run: |
+          test -f package.json || exit 0
+          npm test -- --run
+      - name: Build
+        run: |
+          test -f package.json || exit 0
+          npm run build
