@@ -22,6 +22,7 @@ import (
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/middleware"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/observability"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/postgres"
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/students"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/tenancy"
 	migrations "github.com/Roy-Wanyoike/Skolara/services/api/migrations"
 )
@@ -75,6 +76,10 @@ func run() error {
 	tenSvc := tenancy.NewService(tenancy.NewRepo(pool), pool)
 	tenHandler := tenancy.NewHandler(tenSvc)
 
+	// Students bounded context wiring.
+	stuSvc := students.NewService(students.NewRepo(pool), pool)
+	stuHandler := students.NewHandler(stuSvc)
+
 	// Effective permission set = platform roles (identity) ∪ active
 	// membership roles (tenancy). Wired here at the composition root so
 	// neither domain imports the other.
@@ -95,6 +100,7 @@ func run() error {
 	})
 	idHandler.Register(root)
 	tenHandler.Register(root, jwtMgr, resolver)
+	stuHandler.Register(root, jwtMgr, resolver)
 
 	// Global middleware chain (outermost first):
 	// recover → security headers → request ID → CORS → body limit → rate limit → timeout.
