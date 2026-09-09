@@ -57,7 +57,10 @@ type Repo interface {
 
 	AddMember(ctx context.Context, m *Membership) error
 	MembershipsForUser(ctx context.Context, userID string) ([]*Membership, error)
-	MembershipStatus(ctx context.Context, userID, schoolID string) (string, error)
+	// HasActiveMembership reports whether the user holds ANY active
+	// membership at the school, regardless of role. Deterministic over all
+	// membership rows — access decisions must not depend on row order.
+	HasActiveMembership(ctx context.Context, userID, schoolID string) (bool, error)
 	ListMembers(ctx context.Context, schoolID string) ([]*Membership, error)
 	IsPlatformAdmin(ctx context.Context, userID string) (bool, error)
 	PermissionsFromMemberships(ctx context.Context, userID string) (map[string]bool, error)

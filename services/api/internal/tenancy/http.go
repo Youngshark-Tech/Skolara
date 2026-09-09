@@ -189,8 +189,8 @@ func (h *Handler) canAccessSchool(r *http.Request, schoolID string) bool {
 	if ok, _ := h.svc.IsPlatformAdmin(ctx, claims.UserID); ok {
 		return true
 	}
-	status, err := h.svc.repo.MembershipStatus(ctx, claims.UserID, schoolID)
-	return err == nil && status == "active"
+	active, err := h.svc.HasActiveMembership(ctx, claims.UserID, schoolID)
+	return err == nil && active
 }
 
 func (h *Handler) listCampuses(w http.ResponseWriter, r *http.Request) {

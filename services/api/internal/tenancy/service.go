@@ -105,6 +105,12 @@ func (s *Service) PermissionsFor(ctx context.Context, userID string) (map[string
 	return s.repo.PermissionsFromMemberships(ctx, userID)
 }
 
+// HasActiveMembership exposes the deterministic any-active-row access check
+// used by school-scoped handlers.
+func (s *Service) HasActiveMembership(ctx context.Context, userID, schoolID string) (bool, error) {
+	return s.repo.HasActiveMembership(ctx, userID, schoolID)
+}
+
 // IsPlatformAdmin reports whether the user holds the platform_admin role.
 func (s *Service) IsPlatformAdmin(ctx context.Context, userID string) (bool, error) {
 	return s.repo.IsPlatformAdmin(ctx, userID)

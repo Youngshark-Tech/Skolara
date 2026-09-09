@@ -131,8 +131,8 @@ func TestTenantIsolationMatrix(t *testing.T) {
 	}
 
 	// 4. Membership status check is the isolation guard
-	status, err := svc.repo.MembershipStatus(ctx, userA, sB.ID)
-	if err == nil && status == "active" {
+	active, err := svc.repo.HasActiveMembership(ctx, userA, sB.ID)
+	if err != nil || active {
 		t.Fatal("A has membership in B — isolation broken")
 	}
 
@@ -191,5 +191,70 @@ func TestSchoolCreatedEventOutboxed(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("SchoolCreated events = %d", count)
+	}
+}
+
+// TestDualRoleMembershipAccessDeterministic guards the audit fix for the
+// role-agnostic, non-deterministic access check: a user with one SUSPENDED
+// and one ACTIVE membership at the same school must always be granted access
+// (any-active-row semantics), while a suspended-only user must always be
+// denied — regardless of row order returned by the database.
+func TestDualRoleMembershipAccessDeterministic(t *testing.T) {
+	svc, authSvc, pool := newTenancyFixture(t)
+	ctx := context.Background()
+
+	school, err := svc.CreateSchool(ctx, "DUAL-S", "Dual Role School", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := svc.CreateSchool(ctx, "DUAL-T", "Other School", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ids := seedUsers(t, authSvc, "dual@skolara.test", "susp@skolara.test", "out@skolara.test")
+	dual, suspOnly, outsider := ids["dual@skolara.test"], ids["susp@skolara.test"], ids["out@skolara.test"]
+
+	// dual: suspended teacher + active school_admin at DUAL-S.
+	if err := svc.AddMember(ctx, school.ID, dual, "teacher"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE school_memberships SET status='suspended' WHERE user_id=$1 AND school_id=$2 AND role=(SELECT id FROM roles WHERE name='teacher')`,
+		dual, school.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.AddMember(ctx, school.ID, dual, "school_admin"); err != nil {
+		t.Fatal(err)
+	}
+
+	// suspOnly: only a suspended membership at DUAL-S.
+	if err := svc.AddMember(ctx, school.ID, suspOnly, "teacher"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE school_memberships SET status='suspended' WHERE user_id=$1 AND school_id=$2`,
+		suspOnly, school.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// outsider: active only at the OTHER school (isolation control).
+	if err := svc.AddMember(ctx, other.ID, outsider, "teacher"); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 20; i++ { // repeat: row order must never leak into the decision
+		got, err := svc.HasActiveMembership(ctx, dual, school.ID)
+		if err != nil || !got {
+			t.Fatalf("dual-role user denied on iteration %d: %v", i, err)
+		}
+		got, err = svc.HasActiveMembership(ctx, suspOnly, school.ID)
+		if err != nil || got {
+			t.Fatalf("suspended-only user granted on iteration %d: %v", i, err)
+		}
+		got, err = svc.HasActiveMembership(ctx, outsider, school.ID)
+		if err != nil || got {
+			t.Fatalf("outsider granted on iteration %d: %v", i, err)
+		}
 	}
 }
