@@ -1,0 +1,13 @@
+{
+  "name": "@skolara/contracts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Skolara API contract: OpenAPI 3.1 spec + generated TypeScript types. Single source of truth for API shape.",
+  "scripts": {
+    "generate": "openapi-typescript openapi.yaml -o generated/schema.d.ts",
+    "check": "npm run generate && git diff --exit-code -- generated/"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.5.0"
+  }
+}

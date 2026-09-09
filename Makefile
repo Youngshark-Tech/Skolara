@@ -21,3 +21,6 @@ migrate-down: ; cd services/api && go run ./cmd/migrate down
 
 compose-up: ; docker compose -f infrastructure/docker-compose.yml up --build
 compose-down: ; docker compose -f infrastructure/docker-compose.yml down
+
+contracts-generate: ; cd packages/contracts && npm install && npm run generate
+contracts-check: ; cd packages/contracts && npm ci && npm run check
