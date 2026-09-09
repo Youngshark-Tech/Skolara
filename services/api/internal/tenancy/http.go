@@ -98,8 +98,12 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 		httpx.BadRequest(w, "name required")
 		return
 	}
-	g := &EducationGroup{ID: newID(), Name: req.Name}
-	if err := h.svc.repo.CreateGroup(r.Context(), g); err != nil {
+	g, err := h.svc.CreateGroup(r.Context(), req.Name, identity.ClaimsFrom(r.Context()).UserID)
+	if err != nil {
+		if errors.Is(err, ErrValidation) {
+			httpx.BadRequest(w, err.Error())
+			return
+		}
 		httpx.Internal(w, nil, r.Context(), "create group", err)
 		return
 	}
@@ -107,7 +111,7 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
-	groups, err := h.svc.repo.ListGroups(r.Context())
+	groups, err := h.svc.Groups(r.Context())
 	if err != nil {
 		httpx.Internal(w, nil, r.Context(), "list groups", err)
 		return

@@ -258,3 +258,33 @@ func TestDualRoleMembershipAccessDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// TestAddMemberReferenceErrors guards the 500->4xx error-mapping fix:
+// unknown role names and unknown user ids are rejected as validation errors,
+// not raw database violations.
+func TestAddMemberReferenceErrors(t *testing.T) {
+	svc, authSvc, _ := newTenancyFixture(t)
+	ctx := context.Background()
+
+	school, err := svc.CreateSchool(ctx, "REF-S", "Ref School", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := seedUsers(t, authSvc, "member@skolara.test")
+	userID := ids["member@skolara.test"]
+
+	if err := svc.AddMember(ctx, school.ID, userID, "not_a_role"); err == nil {
+		t.Fatal("unknown role accepted")
+	}
+	if err := svc.AddMember(ctx, school.ID, "00000000-0000-0000-0000-000000000009", "teacher"); err == nil {
+		t.Fatal("unknown user accepted")
+	}
+	// Unknown user with unknown role: role check fires first (still 4xx).
+	if err := svc.AddMember(ctx, school.ID, "00000000-0000-0000-0000-000000000009", "nope"); err == nil {
+		t.Fatal("unknown user+role accepted")
+	}
+	// Valid pair still works.
+	if err := svc.AddMember(ctx, school.ID, userID, "teacher"); err != nil {
+		t.Fatalf("valid member add: %v", err)
+	}
+}

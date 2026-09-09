@@ -137,3 +137,24 @@ func TestAuditRecordsWritten(t *testing.T) {
 		t.Fatalf("audit rows = %d", count)
 	}
 }
+
+// TestAssignRoleReferenceErrors guards the 500->4xx error-mapping fix.
+func TestAssignRoleReferenceErrors(t *testing.T) {
+	svc, _ := newAuthService(t)
+	ctx := context.Background()
+
+	u, err := svc.CreateUser(ctx, "roleadmin@skolara.test", "Role Admin", "s3cure-passw0rd!", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.AssignRole(ctx, u.ID, u.ID, "definitely_not_a_role"); err == nil {
+		t.Fatal("unknown role accepted")
+	}
+	if err := svc.AssignRole(ctx, u.ID, "00000000-0000-0000-0000-000000000008", "teacher"); err == nil {
+		t.Fatal("unknown user accepted")
+	}
+	if err := svc.AssignRole(ctx, u.ID, u.ID, "teacher"); err != nil {
+		t.Fatalf("valid assignment: %v", err)
+	}
+}

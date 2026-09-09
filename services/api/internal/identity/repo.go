@@ -151,6 +151,14 @@ func (r *pgRepo) PermissionsForUser(ctx context.Context, userID string) (map[str
 	return out, rows.Err()
 }
 
+// RoleExists reports whether the named role exists in the RBAC seed.
+func (r *pgRepo) RoleExists(ctx context.Context, name string) (bool, error) {
+	var exists bool
+	err := r.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM roles WHERE name = $1)`, name).Scan(&exists)
+	return exists, err
+}
+
 func (r *pgRepo) AssignRole(ctx context.Context, userID, roleName string) error {
 	ct, err := r.pool.Exec(ctx,
 		`INSERT INTO user_roles (user_id, role_id) VALUES ($1, (SELECT id FROM roles WHERE name=$2))

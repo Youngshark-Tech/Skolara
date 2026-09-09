@@ -112,6 +112,14 @@ func (r *pgRepo) ListCampuses(ctx context.Context, schoolID string) ([]*Campus, 
 
 const memberCols = `user_id, school_id, r.name, m.status`
 
+// RoleExists reports whether the named role exists in the RBAC seed.
+func (r *pgRepo) RoleExists(ctx context.Context, name string) (bool, error) {
+	var exists bool
+	err := r.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM roles WHERE name = $1)`, name).Scan(&exists)
+	return exists, err
+}
+
 func (r *pgRepo) AddMember(ctx context.Context, m *Membership) error {
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO school_memberships (user_id, school_id, role)

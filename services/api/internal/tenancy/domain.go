@@ -46,6 +46,7 @@ type Membership struct {
 type Repo interface {
 	CreateGroup(ctx context.Context, g *EducationGroup) error
 	ListGroups(ctx context.Context) ([]*EducationGroup, error)
+	RoleExists(ctx context.Context, name string) (bool, error)
 
 	CreateSchool(ctx context.Context, s *School) error
 	SchoolByID(ctx context.Context, id string) (*School, error)
