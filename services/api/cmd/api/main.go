@@ -70,7 +70,7 @@ func run() error {
 	idRepo := identity.NewRepo(pool)
 	jwtMgr := identity.NewJWTManager(cfg.JWTSecret, cfg.AccessTokenExpiry)
 	authSvc := identity.NewAuthService(idRepo, jwtMgr)
-	idHandler := identity.NewHandler(authSvc, jwtMgr, pool)
+	idHandler := identity.NewHandler(authSvc, jwtMgr, pool, cfg.IsProd())
 
 	if err := bootstrapPlatformAdmin(ctx, authSvc, log); err != nil {
 		return fmt.Errorf("bootstrap admin: %w", err)
@@ -118,14 +118,20 @@ func run() error {
 	root.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusNotFound, "not_found", "resource not found")
 	})
-	idHandler.Register(root)
-	tenHandler.Register(root, jwtMgr, resolver)
-	stuHandler.Register(root, jwtMgr, resolver)
-	acaHandler.Register(root, jwtMgr, resolver)
-	attHandler.Register(root, jwtMgr, resolver)
-	asgHandler.Register(root, jwtMgr, resolver)
-	finHandler.Register(root, jwtMgr, resolver)
-	finHandler.RegisterWebhook(root)
+	idHandler.Register(root)                    // platform-scope: auth, users, me
+	tenHandler.Register(root, jwtMgr, resolver) // path-param school access (canAccessSchool)
+
+	// Tenant-scoped domains mount behind RequireAuth + RequireSchool so every
+	// school-scoped request resolves its tenant before any domain work
+	// (ADR-006). Platform-scope and public routes stay on root.
+	schoolMux := http.NewServeMux()
+	stuHandler.Register(schoolMux, jwtMgr, resolver)
+	acaHandler.Register(schoolMux, jwtMgr, resolver)
+	attHandler.Register(schoolMux, jwtMgr, resolver)
+	asgHandler.Register(schoolMux, jwtMgr, resolver)
+	finHandler.Register(schoolMux, jwtMgr, resolver)
+	root.Handle("/api/v1/", identity.RequireAuth(jwtMgr, tenancy.RequireSchool(tenSvc, schoolMux)))
+	finHandler.RegisterWebhook(root) // PUBLIC: HMAC-gated webhook
 
 	// Global middleware chain (outermost first):
 	// recover → security headers → request ID → CORS → body limit → rate limit → timeout.
