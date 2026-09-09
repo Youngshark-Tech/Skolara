@@ -82,12 +82,12 @@ func (s *Service) CreateSchool(ctx context.Context, code, name, groupID, actorID
 	return school, nil
 }
 
-func (s *Service) ListSchools(ctx context.Context, groupID string) ([]*School, error) {
+func (s *Service) ListSchools(ctx context.Context, groupID string, limit, offset int) ([]*School, int, error) {
 	var gid *string
 	if groupID != "" {
 		gid = &groupID
 	}
-	return s.repo.ListSchools(ctx, gid)
+	return s.repo.ListSchools(ctx, gid, limit, offset)
 }
 
 func (s *Service) School(ctx context.Context, id string) (*School, error) {
@@ -108,8 +108,8 @@ func (s *Service) CreateCampus(ctx context.Context, schoolID, code, name, locati
 	return c, nil
 }
 
-func (s *Service) Campuses(ctx context.Context, schoolID string) ([]*Campus, error) {
-	return s.repo.ListCampuses(ctx, schoolID)
+func (s *Service) Campuses(ctx context.Context, schoolID string, limit, offset int) ([]*Campus, int, error) {
+	return s.repo.ListCampuses(ctx, schoolID, limit, offset)
 }
 
 // AddMember grants a user a school-scoped role after validating the role
@@ -201,9 +201,9 @@ func (s *Service) MembershipsFor(ctx context.Context, userID string) ([]*Members
 	return s.repo.MembershipsForUser(ctx, userID)
 }
 
-// Members lists a school's members (already tenant-scoped by caller).
-func (s *Service) Members(ctx context.Context, schoolID string) ([]*Membership, error) {
-	return s.repo.ListMembers(ctx, schoolID)
+// Members lists a school's members, paginated.
+func (s *Service) Members(ctx context.Context, schoolID string, limit, offset int) ([]*Membership, int, error) {
+	return s.repo.ListMembers(ctx, schoolID, limit, offset)
 }
 
 func isUniqueViolation(err error) bool {

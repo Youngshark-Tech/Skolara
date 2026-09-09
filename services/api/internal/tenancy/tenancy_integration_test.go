@@ -71,13 +71,13 @@ func TestSchoolCreationAndHierarchy(t *testing.T) {
 	if c.SchoolID != s1.ID {
 		t.Fatalf("campus school mismatch")
 	}
-	campuses, err := svc.Campuses(ctx, s1.ID)
+	campuses, _, err := svc.Campuses(ctx, s1.ID, 50, 0)
 	if err != nil || len(campuses) != 1 {
 		t.Fatalf("campus list: %v %v", campuses, err)
 	}
 
 	// Group listing returns both schools
-	all, err := svc.ListSchools(ctx, g.ID)
+	all, _, err := svc.ListSchools(ctx, g.ID, 50, 0)
 	if err != nil || len(all) != 2 {
 		t.Fatalf("group schools: %v %v", all, err)
 	}
@@ -170,7 +170,7 @@ func TestMembershipScopedRoles(t *testing.T) {
 	if err := svc.AddMember(ctx, s.ID, ids["teacher1@school.test"], "teacher"); err != nil {
 		t.Fatal(err)
 	}
-	members, err := svc.Members(ctx, s.ID)
+	members, _, err := svc.Members(ctx, s.ID, 50, 0)
 	if err != nil || len(members) != 1 {
 		t.Fatalf("members: %v %v", members, err)
 	}

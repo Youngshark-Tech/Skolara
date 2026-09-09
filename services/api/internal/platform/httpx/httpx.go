@@ -255,6 +255,37 @@ func BodyLimitMiddleware(maxBytes int64, next http.Handler) http.Handler {
 	})
 }
 
+// Pagination parses limit/offset query parameters with safe bounds:
+// limit defaults to 50 and is capped at 100; offset is non-negative.
+func Pagination(r *http.Request) (limit, offset int) {
+	limit = intQueryDefault(r.URL.Query().Get("limit"), 50)
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	offset = intQueryDefault(r.URL.Query().Get("offset"), 0)
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}
+
+func intQueryDefault(v string, def int) int {
+	if v == "" {
+		return def
+	}
+	n := 0
+	for _, c := range v {
+		if c < '0' || c > '9' {
+			return def
+		}
+		n = n*10 + int(c-'0')
+	}
+	if n == 0 {
+		return def
+	}
+	return n
+}
+
 // DecodeJSON decodes a strictly-shaped JSON body with defensive size enforcement.
 func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 	dec := json.NewDecoder(r.Body)

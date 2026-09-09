@@ -67,26 +67,36 @@ func (r *pgRepo) LearnerInSchool(ctx context.Context, schoolID, learnerID string
 
 // ListLearners lists (and optionally name-searches) learners enrolled at a
 // school. Learners are global; the school join is what scopes the listing.
-func (r *pgRepo) ListLearners(ctx context.Context, schoolID, query string) ([]*Learner, error) {
+func (r *pgRepo) ListLearners(ctx context.Context, schoolID, query string, limit, offset int) ([]*Learner, int, error) {
+	var total int
+	if err := r.pool.QueryRow(ctx,
+		`SELECT count(DISTINCT l.id) FROM learners l
+                 JOIN enrollments e ON e.learner_id = l.id
+                 WHERE e.school_id = $1
+                   AND ($2::text = '' OR l.first_name ILIKE '%'||$2||'%' OR l.last_name ILIKE '%'||$2||'%')`,
+		schoolID, query).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := r.pool.Query(ctx,
 		`SELECT DISTINCT `+prefixedCols("l", learnerCols)+` FROM learners l
                  JOIN enrollments e ON e.learner_id = l.id
                  WHERE e.school_id = $1
                    AND ($2::text = '' OR l.first_name ILIKE '%'||$2||'%' OR l.last_name ILIKE '%'||$2||'%')
-                 ORDER BY l.last_name, l.first_name`, schoolID, query)
+                 ORDER BY l.last_name, l.first_name
+                 LIMIT $3 OFFSET $4`, schoolID, query, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	out := []*Learner{}
 	for rows.Next() {
 		l, err := scanLearner(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, l)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 // --- guardians and links ----------------------------------------------------
@@ -178,28 +188,34 @@ func (r *pgRepo) EnrollmentByIDInSchool(ctx context.Context, schoolID, id string
 		`SELECT `+enrollmentCols+` FROM enrollments WHERE id = $1 AND school_id = $2`, id, schoolID))
 }
 
-func (r *pgRepo) ListEnrollments(ctx context.Context, schoolID string, status *EnrollmentStatus) ([]*Enrollment, error) {
+func (r *pgRepo) ListEnrollments(ctx context.Context, schoolID string, status *EnrollmentStatus, limit, offset int) ([]*Enrollment, int, error) {
 	var s any
 	if status != nil {
 		s = string(*status)
+	}
+	var total int
+	if err := r.pool.QueryRow(ctx,
+		`SELECT count(*) FROM enrollments
+                 WHERE school_id = $1 AND ($2::text IS NULL OR status = $2::text)`, schoolID, s).Scan(&total); err != nil {
+		return nil, 0, err
 	}
 	rows, err := r.pool.Query(ctx,
 		`SELECT `+enrollmentCols+` FROM enrollments
                  WHERE school_id = $1 AND ($2::text IS NULL OR status = $2::text)
                  ORDER BY created_at DESC`, schoolID, s)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	out := []*Enrollment{}
 	for rows.Next() {
 		e, err := scanEnrollment(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, e)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 // HasOpenEnrollment reports whether the learner already holds a non-terminal
