@@ -38,6 +38,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	observability.Register(mux, "POST /api/v1/users", RequirePermission(h.jwt, h.svc, PermUserManage, http.HandlerFunc(h.handleCreateUser)))
 	observability.Register(mux, "GET /api/v1/users/{id}", RequirePermission(h.jwt, h.svc, PermUserRead, http.HandlerFunc(h.handleGetUser)))
 	observability.Register(mux, "POST /api/v1/users/{id}/roles", RequirePermission(h.jwt, h.svc, PermUserManage, http.HandlerFunc(h.handleAssignRole)))
+	observability.Register(mux, "PATCH /api/v1/users/{id}/status", RequirePermission(h.jwt, h.svc, PermUserManage, http.HandlerFunc(h.handleSetUserStatus)))
 }
 
 type loginRequest struct {
@@ -241,6 +242,29 @@ func (h *Handler) handleGetUser(w http.ResponseWriter, r *http.Request) {
 	u, err := h.svc.GetUser(r.Context(), r.PathValue("id"))
 	if err != nil {
 		httpx.NotFound(w, "user not found")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"id": u.ID, "email": u.Email, "name": u.Name, "status": u.Status})
+}
+
+func (h *Handler) handleSetUserStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		return
+	}
+	u, err := h.svc.SetUserStatus(r.Context(), ClaimsFrom(r.Context()).UserID, id, req.Status)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrValidation):
+			httpx.BadRequest(w, err.Error())
+		case errors.Is(err, ErrNotFound):
+			httpx.NotFound(w, "user not found")
+		default:
+			httpx.Internal(w, nil, r.Context(), "set user status", err)
+		}
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"id": u.ID, "email": u.Email, "name": u.Name, "status": u.Status})

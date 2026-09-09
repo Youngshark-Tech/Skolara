@@ -255,6 +255,41 @@ func (s *AuthService) GetUser(ctx context.Context, id string) (*User, error) {
 	return s.repo.UserByID(ctx, id)
 }
 
+// SetUserStatus transitions a user between active and disabled (admin
+// lifecycle flow). Disabling revokes ALL of the user's refresh tokens so no
+// further token exchange succeeds — staff offboarding invariant.
+func (s *AuthService) SetUserStatus(ctx context.Context, actorID, userID, status string) (*User, error) {
+	switch UserStatus(status) {
+	case StatusActive, StatusDisabled:
+	default:
+		return nil, fmt.Errorf("%w: status must be active or disabled", ErrValidation)
+	}
+	u, err := s.repo.UserByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if u.Status == UserStatus(status) {
+		return u, nil // idempotent
+	}
+	if err := s.repo.UpdateUserStatus(ctx, u.ID, UserStatus(status), u.FailedLoginAttempts, u.LockedUntil); err != nil {
+		return nil, err
+	}
+	if status == string(StatusDisabled) {
+		if err := s.repo.RevokeAllUserRefreshTokens(ctx, u.ID); err != nil {
+			return nil, err
+		}
+	}
+	_ = s.Audit(ctx, AuditEntry{
+		ActorID:      actorID,
+		Action:       "user.status_changed",
+		ResourceType: "user",
+		ResourceID:   u.ID,
+		Before:       map[string]any{"status": string(u.Status)},
+		After:        map[string]any{"status": status},
+	})
+	return s.repo.UserByID(ctx, u.ID)
+}
+
 // ListUsers returns a page of users.
 func (s *AuthService) ListUsers(ctx context.Context, limit, offset int) ([]*User, int, error) {
 	return s.repo.ListUsers(ctx, limit, offset)
