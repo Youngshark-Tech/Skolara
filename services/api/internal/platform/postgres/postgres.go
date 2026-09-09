@@ -113,7 +113,7 @@ func runMigrateFS(databaseURL string, fsys fs.FS, n int) error {
 		}
 		return nil
 	}
-	if err := m.Steps(n); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+	if err := m.Steps(-n); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("migrate: down: %w", err)
 	}
 	return nil
