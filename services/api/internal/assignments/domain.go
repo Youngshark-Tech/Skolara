@@ -110,6 +110,8 @@ type Repo interface {
 	UpdateAssignmentStatus(ctx context.Context, schoolID, id string, from, to AssignmentStatus) error
 
 	UpsertSubmission(ctx context.Context, sub *Submission) error
+	ClassGroupInSchool(ctx context.Context, schoolID, classGroupID string) (bool, error)
+	SubjectInSchool(ctx context.Context, schoolID, subjectID string) (bool, error)
 	Submission(ctx context.Context, schoolID, assignmentID, learnerID string) (*Submission, error)
 	SubmissionsForAssignment(ctx context.Context, schoolID, assignmentID string) ([]*Submission, error)
 	GradeSubmission(ctx context.Context, schoolID, assignmentID, learnerID, grade, feedback string) (*Submission, error)

@@ -10,6 +10,7 @@ import (
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/events"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/postgres"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // Service implements assignments business rules.
@@ -55,6 +56,19 @@ func (s *Service) CreateAssignment(ctx context.Context, schoolID, teacherID stri
 			return nil, ErrDueDatePast
 		}
 		due = &in.DueDate
+	}
+	// Cross-tenant reference guard (#48): class groups and subjects are
+	// school-scoped rows; the global FKs alone would accept another school's
+	// UUIDs. Reject with 404 semantics (anti-enumeration, ADR-006).
+	if ok, err := s.repo.ClassGroupInSchool(ctx, schoolID, in.ClassGroupID); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, fmt.Errorf("%w: class not found in this school", ErrNotFound)
+	}
+	if ok, err := s.repo.SubjectInSchool(ctx, schoolID, in.SubjectID); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, fmt.Errorf("%w: subject not found in this school", ErrNotFound)
 	}
 	a := &Assignment{
 		ID:           uuid.NewString(),
@@ -166,6 +180,11 @@ func (s *Service) SubmitAssignment(ctx context.Context, schoolID, assignmentID, 
 		Status:       SubmissionSubmitted,
 	}
 	if err := s.repo.UpsertSubmission(ctx, sub); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Row exists but is no longer 'submitted' (graded/returned):
+			// resubmission is closed — 409, not an unmapped 500 (#48).
+			return nil, ErrAlreadyGraded
+		}
 		return nil, err
 	}
 	return sub, nil
@@ -195,6 +214,12 @@ func (s *Service) GradeAssignment(ctx context.Context, schoolID, actorID, assign
 	sub, err := s.repo.GradeSubmission(ctx, schoolID, assignmentID, learnerID, strings.TrimSpace(grade), strings.TrimSpace(feedback))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
+			// CAS matched nothing: either the submission does not exist
+			// (404) or it is no longer 'submitted' (409 already graded) —
+			// distinguish instead of conflating into 404 (#48).
+			if existing, gerr := s.repo.Submission(ctx, schoolID, assignmentID, learnerID); gerr == nil && existing.Status != SubmissionSubmitted {
+				return nil, ErrAlreadyGraded
+			}
 			return nil, fmt.Errorf("%w: submission not found", ErrNotFound)
 		}
 		return nil, err
