@@ -5,6 +5,7 @@ package tenancy
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/identity"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/postgres"
@@ -14,7 +15,7 @@ import (
 func newTenancyFixture(t *testing.T) (*Service, *identity.AuthService, *postgres.Pool) {
 	t.Helper()
 	pool := testdb.New(t)
-	jwt := identity.NewJWTManager("integration-test-secret-at-least-32-bytes!", 1<<30)
+	jwt := identity.NewJWTManager("integration-test-secret-at-least-32-bytes!", 1<<30*time.Second)
 	authSvc := identity.NewAuthService(identity.NewRepo(pool), jwt)
 	svc := NewService(NewRepo(pool), pool)
 	return svc, authSvc, pool
