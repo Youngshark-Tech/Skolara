@@ -53,6 +53,7 @@ type Repo interface {
 	UserByID(ctx context.Context, id string) (*User, error)
 	UserByEmail(ctx context.Context, email string) (*User, error)
 	UpdateUserStatus(ctx context.Context, id string, status UserStatus, failedAttempts int, lockedUntil *time.Time) error
+	RegisterFailedLogin(ctx context.Context, id string, maxAttempts int, lockedUntil time.Time) error
 	ListUsers(ctx context.Context, limit, offset int) ([]*User, int, error)
 
 	RolesForUser(ctx context.Context, userID string) ([]string, error)

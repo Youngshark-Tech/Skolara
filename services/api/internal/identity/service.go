@@ -56,7 +56,11 @@ var (
 )
 
 // Login authenticates, applying lockout policy, and returns an access token
-// plus a new refresh token.
+// plus a new refresh token. The password is verified BEFORE any account-state
+// error is revealed: unknown emails, wrong passwords, disabled and locked
+// accounts all receive the same 401-class ErrBadCredentials until the
+// password proves correct — only then is the actionable state (disabled /
+// locked) disclosed to the legitimate credential holder (issue #43).
 func (s *AuthService) Login(ctx context.Context, email, password, ip string) (access string, refresh string, err error) {
 	u, err := s.repo.UserByEmail(ctx, email)
 	if errors.Is(err, ErrNotFound) {
@@ -69,6 +73,20 @@ func (s *AuthService) Login(ctx context.Context, email, password, ip string) (ac
 	if err != nil {
 		return "", "", err
 	}
+
+	if !VerifyPassword(u.PasswordHash, password) {
+		// Only ACTIVE accounts accumulate failure counts (and can be driven
+		// into lockout by failures). The increment is atomic server-side so
+		// concurrent failed logins cannot under-count the counter (#43).
+		if u.Status == StatusActive {
+			if err := s.repo.RegisterFailedLogin(ctx, u.ID, MaxFailedLogins, s.now().Add(LockoutDuration)); err != nil {
+				return "", "", err
+			}
+		}
+		return "", "", ErrBadCredentials
+	}
+
+	// Password is correct — actionable account state is now safe to reveal.
 	if u.Status == StatusDisabled {
 		return "", "", ErrAccountDisabled
 	}
@@ -83,17 +101,6 @@ func (s *AuthService) Login(ctx context.Context, email, password, ip string) (ac
 		} else {
 			return "", "", ErrAccountLocked
 		}
-	}
-
-	if !VerifyPassword(u.PasswordHash, password) {
-		failed := u.FailedLoginAttempts + 1
-		if failed >= MaxFailedLogins {
-			until := s.now().Add(LockoutDuration)
-			_ = s.repo.UpdateUserStatus(ctx, u.ID, StatusLocked, failed, &until)
-			return "", "", ErrAccountLocked
-		}
-		_ = s.repo.UpdateUserStatus(ctx, u.ID, u.Status, failed, nil)
-		return "", "", ErrBadCredentials
 	}
 
 	if err := s.repo.UpdateUserStatus(ctx, u.ID, StatusActive, 0, nil); err != nil {

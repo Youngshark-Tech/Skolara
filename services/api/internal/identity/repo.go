@@ -79,6 +79,25 @@ func (r *pgRepo) UpdateUserStatus(ctx context.Context, id string, status UserSta
 	return nil
 }
 
+// RegisterFailedLogin atomically bumps the failure counter and locks the
+// account when the threshold is reached. The read-modify-write it replaces
+// under-counted under concurrent failed logins (issue #43). The UPDATE is
+// guarded by status='active': once the account locks, racing requests that
+// read a stale active snapshot cannot keep incrementing (or overflow) the
+// counter. A no-op (already locked) is not an error — the caller is about
+// to return ErrBadCredentials regardless.
+func (r *pgRepo) RegisterFailedLogin(ctx context.Context, id string, maxAttempts int, lockedUntil time.Time) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE users
+                   SET failed_login_attempts = failed_login_attempts + 1,
+                       status = CASE WHEN failed_login_attempts + 1 >= $2 THEN $3 ELSE status END,
+                       locked_until = CASE WHEN failed_login_attempts + 1 >= $2 THEN $4 ELSE locked_until END,
+                       updated_at = now()
+                 WHERE id = $1 AND status = 'active'`,
+		id, maxAttempts, string(StatusLocked), lockedUntil)
+	return err
+}
+
 func (r *pgRepo) ListUsers(ctx context.Context, limit, offset int) ([]*User, int, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50

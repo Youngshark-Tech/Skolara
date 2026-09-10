@@ -331,3 +331,88 @@ func TestConcurrentRefreshSingleWinner(t *testing.T) {
 		t.Fatalf("account should still be loginable: %v", err)
 	}
 }
+
+// TestLoginDoesNotLeakAccountState guards the issue #43 enumeration fix:
+// disabled and locked accounts must return ErrBadCredentials for WRONG
+// passwords (indistinguishable from unknown users); the actionable state is
+// only revealed after the correct password verifies.
+func TestLoginDoesNotLeakAccountState(t *testing.T) {
+	svc, _ := newAuthService(t)
+	ctx := context.Background()
+
+	if _, err := svc.CreateUser(ctx, "leak-a@school.example", "Ann A", "s3cure-passw0rd!", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateUser(ctx, "leak-l@school.example", "Bob L", "s3cure-passw0rd!", ""); err != nil {
+		t.Fatal(err)
+	}
+	disabled, _ := svc.repo.UserByEmail(ctx, "leak-a@school.example")
+
+	// Drive the second account into lockout.
+	for i := 0; i < MaxFailedLogins; i++ {
+		if _, _, err := svc.Login(ctx, "leak-l@school.example", "wrong", "10.1.0.1"); err != nil && !errors.Is(err, ErrBadCredentials) {
+			t.Fatalf("lockout drive attempt %d: %v", i, err)
+		}
+	}
+	if u, _ := svc.repo.UserByEmail(ctx, "leak-l@school.example"); u.Status != StatusLocked {
+		t.Fatalf("expected locked, got %s", u.Status)
+	}
+
+	// Disable the first account.
+	if err := svc.repo.UpdateUserStatus(ctx, disabled.ID, StatusDisabled, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wrong password on disabled/locked accounts: generic bad credentials.
+	if _, _, err := svc.Login(ctx, "leak-a@school.example", "wrong", "10.1.0.2"); !errors.Is(err, ErrBadCredentials) {
+		t.Fatalf("disabled+wrong password leaked state: %v", err)
+	}
+	if _, _, err := svc.Login(ctx, "leak-l@school.example", "wrong", "10.1.0.2"); !errors.Is(err, ErrBadCredentials) {
+		t.Fatalf("locked+wrong password leaked state: %v", err)
+	}
+
+	// Correct password reveals actionable state.
+	if _, _, err := svc.Login(ctx, "leak-l@school.example", "s3cure-passw0rd!", "10.1.0.2"); !errors.Is(err, ErrAccountLocked) {
+		t.Fatalf("locked+correct password: expected ErrAccountLocked, got %v", err)
+	}
+}
+
+// TestConcurrentFailedLoginsExactLockout guards the atomic counter (#43):
+// 2xMaxFailedLogins parallel wrong-password logins must produce EXACTLY
+// MaxFailedLogins counted failures (no read-modify-write undercount) and a
+// locked account.
+func TestConcurrentFailedLoginsExactLockout(t *testing.T) {
+	svc, pool := newAuthService(t)
+	ctx := context.Background()
+
+	if _, err := svc.CreateUser(ctx, "race-lock@school.example", "Race Lock", "s3cure-passw0rd!", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	const attempts = MaxFailedLogins * 2
+	errs := make(chan error, attempts)
+	for i := 0; i < attempts; i++ {
+		go func() {
+			_, _, err := svc.Login(ctx, "race-lock@school.example", "definitely-wrong", "10.2.0.1")
+			errs <- err
+		}()
+	}
+	for i := 0; i < attempts; i++ {
+		if err := <-errs; err != nil && !errors.Is(err, ErrBadCredentials) {
+			t.Fatalf("concurrent failed login error: %v", err)
+		}
+	}
+
+	var failed int
+	var status string
+	if err := pool.QueryRow(ctx,
+		`SELECT failed_login_attempts, status FROM users WHERE email='race-lock@school.example'`).Scan(&failed, &status); err != nil {
+		t.Fatal(err)
+	}
+	if failed != MaxFailedLogins {
+		t.Fatalf("atomic counter violated: got %d failures, want exactly %d", failed, MaxFailedLogins)
+	}
+	if status != string(StatusLocked) {
+		t.Fatalf("expected locked, got %s", status)
+	}
+}
