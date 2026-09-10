@@ -113,6 +113,33 @@ func (s *Service) SubmitRecords(ctx context.Context, schoolID, sessionID, actorI
 	if sess.Status != SessionOpen {
 		return ErrSessionClosed
 	}
+
+	// Enrollment-scope guard (#49): learner identities are global, so every
+	// NEWLY recorded learner must hold an open enrollment at the acting
+	// school. Learners already recorded in this session skip the check so
+	// idempotent replays keep succeeding even after an enrollment ends.
+	recorded, err := s.repo.RecordedLearnerIDs(ctx, schoolID, sessionID)
+	if err != nil {
+		return err
+	}
+	var toCheck []string
+	for _, in := range records {
+		if !recorded[in.LearnerID] {
+			toCheck = append(toCheck, in.LearnerID)
+		}
+	}
+	if len(toCheck) > 0 {
+		enrolled, err := s.repo.EnrolledLearners(ctx, schoolID, toCheck)
+		if err != nil {
+			return err
+		}
+		for _, in := range records {
+			if !recorded[in.LearnerID] && !enrolled[in.LearnerID] {
+				return fmt.Errorf("%w: learner %s has no open enrollment at this school", ErrValidation, in.LearnerID)
+			}
+		}
+	}
+
 	if err := s.repo.UpsertRecords(ctx, schoolID, sessionID, actorID, records); err != nil {
 		return err
 	}
@@ -153,13 +180,18 @@ func (s *Service) CloseSession(ctx context.Context, schoolID, sessionID string) 
 		}
 		return nil, err
 	}
-	if err := s.repo.CloseSession(ctx, schoolID, sessionID); err != nil {
+	applied, err := s.repo.CloseSession(ctx, schoolID, sessionID)
+	if err != nil {
 		return nil, err
 	}
-	s.emit(ctx, schoolID, sessionID, "attendance.SessionClosed", map[string]any{
-		"class_group_id": sess.ClassGroupID,
-		"date":           sess.Date,
-	})
+	if applied {
+		// Emit only on the open->closed transition; replays stay silent so
+		// the at-least-once stream is not spammed by double closes (#49).
+		s.emit(ctx, schoolID, sessionID, "attendance.SessionClosed", map[string]any{
+			"class_group_id": sess.ClassGroupID,
+			"date":           sess.Date,
+		})
+	}
 	return s.repo.SessionByID(ctx, schoolID, sessionID)
 }
 
