@@ -41,8 +41,34 @@ func scanUser(row pgx.Row) (*User, error) {
 
 const userCols = `id, email, name, password_hash, status, failed_login_attempts, locked_until, created_at, updated_at`
 
+// CreateUserWithRole inserts the user and (optionally) grants the role in one
+// transaction — user+role are atomic (issue #53). Empty roleName skips the
+// grant.
+func (r *pgRepo) CreateUserWithRole(ctx context.Context, u *User, roleName string) error {
+	return r.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		if err := r.createUserQ(ctx, tx, u); err != nil {
+			return err
+		}
+		if roleName != "" {
+			_, err := tx.Exec(ctx,
+				`INSERT INTO user_roles (user_id, role_id) VALUES ($1, (SELECT id FROM roles WHERE name=$2 AND scope='platform'))
+				 ON CONFLICT DO NOTHING`, u.ID, roleName)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// CreateUser inserts a user (no role grant) — retained for callers that only
+// provision identities; admin flows use CreateUserWithRole.
 func (r *pgRepo) CreateUser(ctx context.Context, u *User) error {
-	row := r.pool.QueryRow(ctx,
+	return r.createUserQ(ctx, r.pool, u)
+}
+
+func (r *pgRepo) createUserQ(ctx context.Context, q postgres.Querier, u *User) error {
+	row := q.QueryRow(ctx,
 		`INSERT INTO users (id, email, name, password_hash) VALUES ($1,$2,$3,$4)
                  RETURNING `+userCols,
 		u.ID, strings.ToLower(u.Email), u.Name, u.PasswordHash)

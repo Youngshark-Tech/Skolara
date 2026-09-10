@@ -141,6 +141,7 @@ func run() error {
 	handler = httpx.BodyLimitMiddleware(cfg.MaxBodyBytes, handler)
 	handler = httpx.CORSMiddleware(cfg.CORSOrigins, handler)
 	handler = httpx.RequestIDMiddleware(handler)
+	handler = httpx.AccessLogMiddleware(log, handler)
 	handler = httpx.SecurityHeadersMiddleware(handler)
 	handler = httpx.RecoverMiddleware(log, handler)
 
