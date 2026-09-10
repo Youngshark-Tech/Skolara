@@ -123,11 +123,13 @@ func (r *pgRepo) ListCampuses(ctx context.Context, schoolID string, limit, offse
 
 const memberCols = `user_id, school_id, r.name, m.status`
 
-// RoleExists reports whether the named role exists in the RBAC seed.
+// RoleExists reports whether the named role exists AND is school-scoped.
+// Platform-scope roles (platform_admin, group_admin) must never be granted as
+// school memberships — that was a privilege-escalation chain (issue #40).
 func (r *pgRepo) RoleExists(ctx context.Context, name string) (bool, error) {
 	var exists bool
 	err := r.pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM roles WHERE name = $1)`, name).Scan(&exists)
+		`SELECT EXISTS (SELECT 1 FROM roles WHERE name = $1 AND scope = 'school')`, name).Scan(&exists)
 	return exists, err
 }
 
@@ -178,11 +180,15 @@ func (r *pgRepo) HasActiveMembership(ctx context.Context, userID, schoolID strin
 }
 
 // PermissionsFromMemberships unions permission names granted through ACTIVE
-// school membership roles (school-scoped RBAC).
+// school membership roles (school-scoped RBAC). The JOIN filters
+// roles.scope='school' as defense in depth: even a legacy/hand-crafted
+// membership row referencing a platform role contributes zero permissions
+// (issue #40).
 func (r *pgRepo) PermissionsFromMemberships(ctx context.Context, userID string) (map[string]bool, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT DISTINCT p.name
                  FROM school_memberships m
+                 JOIN roles ro ON ro.id = m.role AND ro.scope = 'school'
                  JOIN role_permissions rp ON rp.role_id = m.role
                  JOIN permissions p ON p.id = rp.permission_id
                  WHERE m.user_id = $1 AND m.status = 'active'`, userID)
