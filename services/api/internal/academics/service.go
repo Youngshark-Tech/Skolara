@@ -180,9 +180,11 @@ func (s *Service) ClassGroupByID(ctx context.Context, schoolID, id string) (*Cla
 }
 
 // AddRoster seats learners in a class (1..500 ids, all valid UUIDs). The
-// insert is idempotent; unknown learner ids surface as FK violations and map
-// to ErrValidation. Cross-domain existence is guarded by the DB FK
-// (learners.id) — academics never imports students.
+// insert is idempotent. Seats are enrollment-scoped (issue #42): only
+// learners with an open enrollment at the acting school can be seated —
+// learner identities are global, so seat-any-learner would leak PII across
+// tenants via the roster listing. Unenrolled/unknown ids are rejected as
+// ErrValidation without revealing which school (if any) they belong to.
 func (s *Service) AddRoster(ctx context.Context, schoolID, classGroupID string, learnerIDs []string) error {
 	if len(learnerIDs) == 0 || len(learnerIDs) > maxRosterBatch {
 		return ErrBatchSize
@@ -202,11 +204,16 @@ func (s *Service) AddRoster(ctx context.Context, schoolID, classGroupID string, 
 	for _, id := range learnerIDs {
 		trimmed = append(trimmed, strings.TrimSpace(id))
 	}
-	if err := s.repo.AddRosterEntries(ctx, schoolID, classGroupID, trimmed); err != nil {
+	rejected, err := s.repo.AddRosterEntries(ctx, schoolID, classGroupID, trimmed)
+	if err != nil {
 		if isFKViolation(err) {
 			return fmt.Errorf("%w: one or more learner ids do not exist", ErrValidation)
 		}
 		return err
+	}
+	if len(rejected) > 0 {
+		return fmt.Errorf("%w: %d learner(s) not enrolled at this school (first: %s)",
+			ErrValidation, len(rejected), rejected[0])
 	}
 	return nil
 }
