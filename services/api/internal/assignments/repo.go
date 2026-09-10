@@ -117,7 +117,9 @@ func scanSubmission(row pgx.Row) (*Submission, error) {
 }
 
 // UpsertSubmission inserts or refreshes a submission while it stays in the
-// submitted state (one row per assignment+learner).
+// submitted state (one row per assignment+learner). pgx.ErrNoRows here means
+// the row exists but is no longer 'submitted' — the service translates that
+// to ErrAlreadyGraded (409) instead of an unmapped 500 (issue #48).
 func (r *pgRepo) UpsertSubmission(ctx context.Context, sub *Submission) error {
 	return r.pool.QueryRow(ctx,
 		`INSERT INTO assignment_submissions (id, school_id, assignment_id, learner_id, content)
@@ -130,6 +132,26 @@ func (r *pgRepo) UpsertSubmission(ctx context.Context, sub *Submission) error {
 		uuid.NewString(), sub.SchoolID, sub.AssignmentID, sub.LearnerID, sub.Content).
 		Scan(&sub.ID, &sub.SchoolID, &sub.AssignmentID, &sub.LearnerID, &sub.Content, &sub.Status,
 			&sub.Grade, &sub.Feedback, &sub.SubmittedAt, &sub.GradedAt, &sub.ReturnedAt)
+}
+
+// ClassGroupInSchool reports whether the class belongs to the acting school
+// (cross-tenant reference guard, issue #48).
+func (r *pgRepo) ClassGroupInSchool(ctx context.Context, schoolID, classGroupID string) (bool, error) {
+	var ok bool
+	err := r.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM class_groups WHERE id = $1 AND school_id = $2)`,
+		classGroupID, schoolID).Scan(&ok)
+	return ok, err
+}
+
+// SubjectInSchool reports whether the subject belongs to the acting school
+// (cross-tenant reference guard, issue #48).
+func (r *pgRepo) SubjectInSchool(ctx context.Context, schoolID, subjectID string) (bool, error) {
+	var ok bool
+	err := r.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM subjects WHERE id = $1 AND school_id = $2)`,
+		subjectID, schoolID).Scan(&ok)
+	return ok, err
 }
 
 func (r *pgRepo) Submission(ctx context.Context, schoolID, assignmentID, learnerID string) (*Submission, error) {

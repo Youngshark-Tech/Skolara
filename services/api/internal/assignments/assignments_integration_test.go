@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -382,4 +383,52 @@ func TestAssignmentsHTTPFlow(t *testing.T) {
 		t.Fatalf("no school: %d", rr.Code)
 	}
 	_ = teacher
+}
+
+// TestAssignmentStatusCodesAfterGrading guards the issue #48 fixes:
+// resubmit-after-grade -> ErrAlreadyGraded (409, was unmapped 500);
+// re-grade -> ErrAlreadyGraded (409, was 404); cross-school class/subject
+// references rejected at create (404 semantics, was silently accepted).
+func TestAssignmentStatusCodesAfterGrading(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	schoolA := mustSchool(t, f, "ASG-CA", "Codes School A")
+	schoolB := mustSchool(t, f, "ASG-CB", "Codes School B")
+	teacher := mustUser(t, f, "asg-codes@skolara.test")
+	classA, subjectA := seedClassMaterial(t, f, schoolA.ID, "Form C")
+	learner := seedLearner(t, f, "Cod", "Es")
+	seedRoster(t, f, classA, learner)
+
+	a := mustAssignment(t, f, schoolA.ID, teacher, classA, subjectA, "Codes HW", futureDate())
+	if _, err := f.svc.PublishAssignment(ctx, schoolA.ID, teacher, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.SubmitAssignment(ctx, schoolA.ID, a.ID, learner, "final answer"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.GradeAssignment(ctx, schoolA.ID, teacher, a.ID, learner, "B+", "solid"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Resubmit after grading: 409-class domain error, NOT pgx.ErrNoRows/500.
+	if _, err := f.svc.SubmitAssignment(ctx, schoolA.ID, a.ID, learner, "one more try"); !errors.Is(err, ErrAlreadyGraded) {
+		t.Fatalf("resubmit-after-grade: want ErrAlreadyGraded, got %v", err)
+	}
+	// Re-grade: 409-class domain error, NOT 404.
+	if _, err := f.svc.GradeAssignment(ctx, schoolA.ID, teacher, a.ID, learner, "A", "regrade"); !errors.Is(err, ErrAlreadyGraded) {
+		t.Fatalf("re-grade: want ErrAlreadyGraded, got %v", err)
+	}
+
+	// Cross-school references rejected with 404 semantics.
+	classB, subjectB := seedClassMaterial(t, f, schoolB.ID, "Form B")
+	if _, err := f.svc.CreateAssignment(ctx, schoolA.ID, teacher, CreateAssignmentInput{
+		ClassGroupID: classB, SubjectID: subjectA, Title: "Steal class", DueDate: futureDate(),
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-school classGroup accepted: %v", err)
+	}
+	if _, err := f.svc.CreateAssignment(ctx, schoolA.ID, teacher, CreateAssignmentInput{
+		ClassGroupID: classA, SubjectID: subjectB, Title: "Steal subject", DueDate: futureDate(),
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-school subject accepted: %v", err)
+	}
 }
