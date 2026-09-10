@@ -35,7 +35,7 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	pool := testdb.New(t)
-	jwt := identity.NewJWTManager("integration-test-secret-at-least-32-bytes!", 1<<30)
+	jwt := identity.NewJWTManager("integration-test-secret-at-least-32-bytes!", 1<<30*time.Second)
 	authSvc := identity.NewAuthService(identity.NewRepo(pool), jwt)
 	tenSvc := tenancy.NewService(tenancy.NewRepo(pool), pool)
 	svc := NewService(NewRepo(pool), pool, "integration-webhook-secret-0123456789abcdef")
