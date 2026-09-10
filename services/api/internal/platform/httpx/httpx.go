@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ErrBody is the standard API error envelope.
@@ -147,6 +149,35 @@ func AccessLogMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
 		}
 		logger.LogAttrs(r.Context(), slog.LevelInfo, "http_request", attrs...)
 	})
+}
+
+// QueryUUID reads a UUID-typed query parameter. Absent/empty -> ("", true).
+// Present but malformed -> writes a 400 envelope and returns ("", false)
+// (issue #51: malformed filters used to hit SQL casts and surface as 500s).
+func QueryUUID(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
+	v := strings.TrimSpace(r.URL.Query().Get(name))
+	if v == "" {
+		return "", true
+	}
+	if _, err := uuid.Parse(v); err != nil {
+		WriteError(w, http.StatusBadRequest, "validation_failed", name+" must be a UUID")
+		return "", false
+	}
+	return v, true
+}
+
+// QueryDate reads a YYYY-MM-DD query parameter. Absent/empty -> ("", true).
+// Present but malformed -> writes a 400 envelope and returns ("", false).
+func QueryDate(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
+	v := strings.TrimSpace(r.URL.Query().Get(name))
+	if v == "" {
+		return "", true
+	}
+	if _, err := time.Parse("2006-01-02", v); err != nil {
+		WriteError(w, http.StatusBadRequest, "validation_failed", name+" must be YYYY-MM-DD")
+		return "", false
+	}
+	return v, true
 }
 
 // JSON writes a JSON response with the given status.

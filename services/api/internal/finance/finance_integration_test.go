@@ -996,3 +996,40 @@ func TestVoidInvoiceGuardsSemantics(t *testing.T) {
 		t.Fatalf("expected ErrNotAllocatable, got %v", err)
 	}
 }
+
+// TestInvoiceFilterValidation guards the #51 400-fix: malformed filter params
+// on list endpoints return 400, not a SQL-cast 500.
+func TestInvoiceFilterValidation(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	school := mustSchool(t, f, "FIN-FV", "Filter Validation School")
+	learner := seedLearner(t, f, "Fil", "Ter")
+	if _, err := f.auth.CreateUser(ctx, "fv-admin@skolara.test", "FV Admin", "s3cure-passw0rd!", identity.RolePlatformAdmin); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := f.auth.Login(ctx, "fv-admin@skolara.test", "s3cure-passw0rd!", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = learner
+
+	mux := http.NewServeMux()
+	NewHandler(f.svc).Register(mux, f.jwt, f.auth)
+	handler := identity.RequireAuth(f.jwt, tenancy.RequireSchool(f.tenancy, mux))
+
+	do := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("X-School-ID", school.ID)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr
+	}
+
+	if rr := do("/api/v1/invoices?learnerId=abc"); rr.Code != http.StatusBadRequest {
+		t.Fatalf("malformed learnerId: %d %s", rr.Code, rr.Body.String())
+	}
+	if rr := do("/api/v1/invoices"); rr.Code != http.StatusOK {
+		t.Fatalf("no filter: %d %s", rr.Code, rr.Body.String())
+	}
+}

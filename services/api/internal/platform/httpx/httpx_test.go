@@ -188,3 +188,41 @@ func TestAccessLogWithoutScopeStillLogs(t *testing.T) {
 		t.Fatalf("missing status in log: %s", buf.String())
 	}
 }
+
+// TestQueryUUIDAndQueryDate guards the issue #51 helpers: absent filters pass
+// through, malformed filters write a 400 envelope and report not-ok.
+func TestQueryUUIDAndQueryDate(t *testing.T) {
+	mk := func(q string) *http.Request {
+		return httptest.NewRequest(http.MethodGet, "/?"+q, nil)
+	}
+
+	if v, ok := QueryUUID(nil, mk(""), "learnerId"); !ok || v != "" {
+		t.Fatalf("absent uuid: %q %v", v, ok)
+	}
+	if v, ok := QueryUUID(nil, mk("learnerId="), "learnerId"); !ok || v != "" {
+		t.Fatalf("empty uuid: %q %v", v, ok)
+	}
+
+	rr := httptest.NewRecorder()
+	if _, ok := QueryUUID(rr, mk("learnerId=abc"), "learnerId"); ok {
+		t.Fatal("malformed uuid reported ok")
+	}
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("malformed uuid status = %d", rr.Code)
+	}
+
+	if _, ok := QueryUUID(nil, mk("learnerId=00000000-0000-0000-0000-000000000001"), "learnerId"); !ok {
+		t.Fatal("valid uuid rejected")
+	}
+
+	rr2 := httptest.NewRecorder()
+	if _, ok := QueryDate(rr2, mk("date=04/05/2026"), "date"); ok {
+		t.Fatal("malformed date reported ok")
+	}
+	if rr2.Code != http.StatusBadRequest {
+		t.Fatalf("malformed date status = %d", rr2.Code)
+	}
+	if _, ok := QueryDate(nil, mk("date=2026-09-10"), "date"); !ok {
+		t.Fatal("valid date rejected")
+	}
+}

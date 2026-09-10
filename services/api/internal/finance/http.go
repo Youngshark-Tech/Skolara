@@ -127,7 +127,12 @@ func (h *Handler) postEntry(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) getEntry(w http.ResponseWriter, r *http.Request) {
 	e, err := h.svc.Entry(r.Context(), tenancy.SchoolFrom(r.Context()), r.PathValue("id"))
 	if err != nil {
-		httpx.NotFound(w, "journal entry not found")
+		if errors.Is(err, ErrNotFound) {
+			httpx.NotFound(w, "journal entry not found")
+		} else {
+			// Infra failures must not masquerade as 404 (#51).
+			httpx.Internal(w, nil, r.Context(), "get journal entry", err)
+		}
 		return
 	}
 	httpx.JSON(w, http.StatusOK, e)
@@ -201,8 +206,12 @@ func (h *Handler) listInvoices(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	learnerID, ok := httpx.QueryUUID(w, r, "learnerId")
+	if !ok {
+		return
+	}
 	invoices, total, err := h.svc.Invoices(r.Context(), tenancy.SchoolFrom(r.Context()),
-		status, r.URL.Query().Get("learnerId"), limit, offset)
+		status, learnerID, limit, offset)
 	if err != nil {
 		httpx.Internal(w, nil, r.Context(), "list invoices", err)
 		return
@@ -216,7 +225,11 @@ func (h *Handler) listInvoices(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) getInvoice(w http.ResponseWriter, r *http.Request) {
 	inv, err := h.svc.Invoice(r.Context(), tenancy.SchoolFrom(r.Context()), r.PathValue("id"))
 	if err != nil {
-		httpx.NotFound(w, "invoice not found")
+		if errors.Is(err, ErrNotFound) {
+			httpx.NotFound(w, "invoice not found")
+		} else {
+			httpx.Internal(w, nil, r.Context(), "get invoice", err)
+		}
 		return
 	}
 	httpx.JSON(w, http.StatusOK, inv)

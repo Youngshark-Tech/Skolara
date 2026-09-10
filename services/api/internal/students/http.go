@@ -101,8 +101,12 @@ func (h *Handler) listLearners(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) getLearner(w http.ResponseWriter, r *http.Request) {
 	learner, err := h.svc.LearnerByID(r.Context(), tenancy.SchoolFrom(r.Context()), r.PathValue("id"))
 	if err != nil {
-		// 404 (not 403) to avoid tenant enumeration (ADR-006).
-		httpx.NotFound(w, "learner not found")
+		if errors.Is(err, ErrNotFound) {
+			// 404 (not 403) to avoid tenant enumeration (ADR-006).
+			httpx.NotFound(w, "learner not found")
+		} else {
+			httpx.Internal(w, nil, r.Context(), "get learner", err)
+		}
 		return
 	}
 	httpx.JSON(w, http.StatusOK, learner)

@@ -80,6 +80,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	limit, offset := httpx.Pagination(r)
+	classGroupID, ok := httpx.QueryUUID(w, r, "classGroupId")
+	if !ok {
+		return
+	}
 	var status *AssignmentStatus
 	if raw := r.URL.Query().Get("status"); raw != "" {
 		s := AssignmentStatus(raw)
@@ -90,7 +94,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		status = &s
 	}
 	assignments, total, err := h.svc.Assignments(r.Context(), tenancy.SchoolFrom(r.Context()),
-		r.URL.Query().Get("classGroupId"), status, limit, offset)
+		classGroupID, status, limit, offset)
 	if err != nil {
 		httpx.Internal(w, nil, r.Context(), "list assignments", err)
 		return

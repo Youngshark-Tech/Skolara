@@ -47,8 +47,17 @@ func RequireSchool(svc *Service, next http.Handler) http.Handler {
 		}
 		school, err := svc.ResolveSchoolContext(r.Context(), claims.UserID, r.Header.Get("X-School-ID"))
 		if err != nil {
-			httpx.WriteError(w, http.StatusForbidden, "no_school_context",
-				"no active school context: pass X-School-ID of a school you belong to")
+			switch {
+			case errors.Is(err, ErrNotAMember), errors.Is(err, ErrNotFound):
+				// 403 (not 404): the caller IS authenticated; the header is
+				// the problem. No tenant enumeration is possible from this
+				// response shape.
+				httpx.WriteError(w, http.StatusForbidden, "no_school_context",
+					"no active school context: pass X-School-ID of a school you belong to")
+			default:
+				// DB outage etc. must not masquerade as a client problem (#51).
+				httpx.Internal(w, nil, r.Context(), "resolve school context", err)
+			}
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxSchool, school.ID)))
@@ -190,7 +199,11 @@ func (h *Handler) getSchool(w http.ResponseWriter, r *http.Request) {
 	}
 	school, err := h.svc.School(r.Context(), id)
 	if err != nil {
-		httpx.NotFound(w, "school not found")
+		if errors.Is(err, ErrNotFound) {
+			httpx.NotFound(w, "school not found")
+		} else {
+			httpx.Internal(w, nil, r.Context(), "get school", err)
+		}
 		return
 	}
 	httpx.JSON(w, http.StatusOK, school)

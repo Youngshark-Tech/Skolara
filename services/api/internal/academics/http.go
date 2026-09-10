@@ -93,8 +93,12 @@ func (h *Handler) listAcademicYears(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) getAcademicYear(w http.ResponseWriter, r *http.Request) {
 	year, err := h.svc.AcademicYearByID(r.Context(), tenancy.SchoolFrom(r.Context()), r.PathValue("id"))
 	if err != nil {
-		// 404 (not 403) to avoid tenant enumeration (ADR-006).
-		httpx.NotFound(w, "academic year not found")
+		if errors.Is(err, ErrNotFound) {
+			// 404 (not 403) to avoid tenant enumeration (ADR-006).
+			httpx.NotFound(w, "academic year not found")
+		} else {
+			httpx.Internal(w, nil, r.Context(), "get academic year", err)
+		}
 		return
 	}
 	httpx.JSON(w, http.StatusOK, year)
