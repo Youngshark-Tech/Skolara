@@ -151,7 +151,10 @@ type Repo interface {
 	ListClassGroups(ctx context.Context, schoolID, yearID string) ([]*ClassGroup, error)
 
 	// Roster.
-	AddRosterEntries(ctx context.Context, schoolID, classGroupID string, learnerIDs []string) error
+	// AddRosterEntries returns the learner ids that were NOT seated
+	// (unknown, already handled as duplicates are skipped; unenrolled-at-this-
+	// school learners are reported so the service can reject the batch).
+	AddRosterEntries(ctx context.Context, schoolID, classGroupID string, learnerIDs []string) ([]string, error)
 	RosterForClass(ctx context.Context, schoolID, classGroupID string) ([]*RosterEntryView, error)
 
 	// Teaching assignments.

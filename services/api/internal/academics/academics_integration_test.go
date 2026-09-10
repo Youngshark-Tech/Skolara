@@ -59,6 +59,20 @@ func seedLearner(t *testing.T, f *fixture, first, last string) string {
 	return id
 }
 
+// enrollLearner inserts an ACTIVE enrollment at the given school via raw SQL
+// (issue #42: rosters are enrollment-scoped, so tests must seat learners the
+// way the students domain would).
+func enrollLearner(t *testing.T, f *fixture, learnerID, schoolID string) {
+	t.Helper()
+	_, err := f.pool.Exec(context.Background(),
+		`INSERT INTO enrollments (id, school_id, learner_id, status, started_at)
+		 VALUES ($1, $2, $3, 'active', now())`,
+		uuid.NewString(), schoolID, learnerID)
+	if err != nil {
+		t.Fatalf("enroll learner: %v", err)
+	}
+}
+
 func mustTeacher(t *testing.T, f *fixture, email string) string {
 	t.Helper()
 	u, err := f.auth.CreateUser(context.Background(), email, "Techer "+email, "s3cure-passw0rd!", "")
@@ -163,6 +177,8 @@ func TestClassRosterBulkAddAndUnique(t *testing.T) {
 
 	l1 := seedLearner(t, f, "Amina", "Okello")
 	l2 := seedLearner(t, f, "Brian", "Wekesa")
+	enrollLearner(t, f, l1, school.ID)
+	enrollLearner(t, f, l2, school.ID)
 
 	// Batch size guards.
 	if err := f.svc.AddRoster(ctx, school.ID, class.ID, nil); err == nil {
@@ -397,8 +413,9 @@ func TestAcademicsHTTPFlow(t *testing.T) {
 		t.Fatalf("dup class (case-insensitive): %d", rr.Code)
 	}
 
-	// Roster: bulk add 204, list 200 with seeded learner.
+	// Roster: bulk add 204, list 200 with seeded (enrolled) learner.
 	l1 := seedLearner(t, f, "Roster", "One")
+	enrollLearner(t, f, l1, school.ID)
 	rr = do("POST", fmt.Sprintf("/api/v1/classes/%s/roster", class.ID), map[string]any{"learnerIds": []string{l1}}, true)
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("add roster: %d %s", rr.Code, rr.Body.String())
@@ -434,5 +451,58 @@ func TestAcademicsHTTPFlow(t *testing.T) {
 	rr = do("GET", "/api/v1/academic-years", nil, false)
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("no school context: %d", rr.Code)
+	}
+}
+
+// TestRosterRejectsCrossSchoolLearners guards the issue #42 fix: learner
+// identities are GLOBAL, but rosters must only seat learners with an open
+// enrollment at the acting school — otherwise GET /classes/{id}/roster leaks
+// PII of learners enrolled elsewhere.
+func TestRosterRejectsCrossSchoolLearners(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	schoolA := mustSchool(t, f, "ROSTER-A2", "Roster School A")
+	schoolB := mustSchool(t, f, "ROSTER-B2", "Roster School B")
+
+	yearA, _ := f.svc.CreateAcademicYear(ctx, schoolA.ID, "2026", "2026-01-01", "2026-12-31")
+	classA, err := f.svc.CreateClassGroup(ctx, schoolA.ID, yearA.ID, "Grade 5 A")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Learner enrolled ONLY at school B.
+	learnerB := seedLearner(t, f, "Cross", "School")
+	enrollLearner(t, f, learnerB, schoolB.ID)
+
+	// School A cannot seat school B's learner.
+	if err := f.svc.AddRoster(ctx, schoolA.ID, classA.ID, []string{learnerB}); err == nil {
+		t.Fatal("cross-school learner seated — tenant PII leak")
+	}
+	roster, err := f.svc.Roster(ctx, schoolA.ID, classA.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roster) != 0 {
+		t.Fatalf("roster rows leaked: %d", len(roster))
+	}
+
+	// Unknown learner id (valid uuid, no rows anywhere) is equally rejected.
+	if err := f.svc.AddRoster(ctx, schoolA.ID, classA.ID, []string{"00000000-0000-0000-0000-00000000000f"}); err == nil {
+		t.Fatal("unknown learner seated")
+	}
+
+	// A learner enrolled at school A seats fine; a school-B learner does not
+	// join the same batch.
+	learnerA := seedLearner(t, f, "Local", "Student")
+	enrollLearner(t, f, learnerA, schoolA.ID)
+	if err := f.svc.AddRoster(ctx, schoolA.ID, classA.ID, []string{learnerA, learnerB}); err == nil {
+		t.Fatal("mixed batch accepted cross-school learner")
+	}
+	roster, err = f.svc.Roster(ctx, schoolA.ID, classA.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roster) != 1 || roster[0].LastName != "Student" {
+		t.Fatalf("roster should hold exactly the enrolled learner, got %d rows", len(roster))
 	}
 }

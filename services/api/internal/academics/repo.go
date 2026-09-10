@@ -196,20 +196,52 @@ func (r *pgRepo) ListClassGroups(ctx context.Context, schoolID, yearID string) (
 
 // AddRosterEntries bulk-inserts seats idempotently (ON CONFLICT DO NOTHING)
 // inside a single transaction — partial failures leave no half-written roster.
-func (r *pgRepo) AddRosterEntries(ctx context.Context, schoolID, classGroupID string, learnerIDs []string) error {
-	return r.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+//
+// Seats are ENROLLMENT-SCOPED (issue #42): a learner is only seatable when an
+// open enrollment exists at the acting school (same non-terminal state list
+// as the students domain's openEnrollmentStates / HasOpenEnrollment guard —
+// keep both in sync if enrollment states ever change). Learner identities are
+// global, but visibility is tenant-guarded everywhere; seat any global
+// learner here would leak PII across tenants via GET /classes/{id}/roster.
+// Learners already seated are skipped (idempotent replay). Unenrolled (or
+// unknown) learner ids are reported to the caller as rejections.
+func (r *pgRepo) AddRosterEntries(ctx context.Context, schoolID, classGroupID string, learnerIDs []string) ([]string, error) {
+	var rejected []string
+	err := r.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		rejected = rejected[:0]
 		for _, lid := range learnerIDs {
-			if _, err := tx.Exec(ctx,
+			// Idempotent replay: already seated -> skip silently.
+			var seated bool
+			if err := tx.QueryRow(ctx,
+				`SELECT EXISTS (SELECT 1 FROM roster_entries WHERE class_group_id = $1 AND learner_id = $2)`,
+				classGroupID, lid).Scan(&seated); err != nil {
+				return fmt.Errorf("check roster entry: %w", err)
+			}
+			if seated {
+				continue
+			}
+			tag, err := tx.Exec(ctx,
 				`INSERT INTO roster_entries (class_group_id, learner_id)
 				 SELECT $1, $2
 				 WHERE EXISTS (SELECT 1 FROM class_groups WHERE id = $1 AND school_id = $3)
+				   AND EXISTS (SELECT 1 FROM enrollments e
+				               WHERE e.learner_id = $2 AND e.school_id = $3
+				                 AND e.status IN ('applicant','admitted','active','suspended','transfer_pending'))
 				 ON CONFLICT (class_group_id, learner_id) DO NOTHING`,
-				classGroupID, lid, schoolID); err != nil {
+				classGroupID, lid, schoolID)
+			if err != nil {
 				return fmt.Errorf("insert roster entry: %w", err)
+			}
+			if tag.RowsAffected() == 0 {
+				rejected = append(rejected, lid)
 			}
 		}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return rejected, nil
 }
 
 func (r *pgRepo) RosterForClass(ctx context.Context, schoolID, classGroupID string) ([]*RosterEntryView, error) {
