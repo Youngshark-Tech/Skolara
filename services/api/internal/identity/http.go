@@ -166,7 +166,11 @@ func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFrom(r.Context())
 	u, err := h.svc.GetUser(r.Context(), claims.UserID)
 	if err != nil {
-		httpx.NotFound(w, "user not found")
+		if errors.Is(err, ErrNotFound) {
+			httpx.NotFound(w, "user not found")
+		} else {
+			httpx.Internal(w, nil, r.Context(), "get user", err)
+		}
 		return
 	}
 	perms, err := h.svc.PermissionsFor(r.Context(), u.ID)
@@ -251,7 +255,11 @@ func (h *Handler) handleListUsers(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleGetUser(w http.ResponseWriter, r *http.Request) {
 	u, err := h.svc.GetUser(r.Context(), r.PathValue("id"))
 	if err != nil {
-		httpx.NotFound(w, "user not found")
+		if errors.Is(err, ErrNotFound) {
+			httpx.NotFound(w, "user not found")
+		} else {
+			httpx.Internal(w, nil, r.Context(), "get user", err)
+		}
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"id": u.ID, "email": u.Email, "name": u.Name, "status": u.Status})

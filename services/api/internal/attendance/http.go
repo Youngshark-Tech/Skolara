@@ -65,8 +65,16 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) listSessions(w http.ResponseWriter, r *http.Request) {
 	limit, offset := httpx.Pagination(r)
+	classGroupID, ok := httpx.QueryUUID(w, r, "classGroupId")
+	if !ok {
+		return
+	}
+	date, ok := httpx.QueryDate(w, r, "date")
+	if !ok {
+		return
+	}
 	sessions, total, err := h.svc.Sessions(r.Context(), tenancy.SchoolFrom(r.Context()),
-		r.URL.Query().Get("classGroupId"), r.URL.Query().Get("date"), limit, offset)
+		classGroupID, date, limit, offset)
 	if err != nil {
 		httpx.Internal(w, nil, r.Context(), "list sessions", err)
 		return
