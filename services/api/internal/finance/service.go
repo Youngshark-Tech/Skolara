@@ -159,27 +159,12 @@ func (s *Service) PostEntry(ctx context.Context, schoolID, actorID, description,
 		sourceRef = correctionOf
 	}
 
-	// Idempotent replay: return the original result without posting.
-	if idempotencyKey != "" {
-		stored, err := s.repo.IdempotencyResult(ctx, idempotencyKey)
-		if err != nil {
-			return nil, err
-		}
-		if stored != nil {
-			var res struct {
-				EntryID string `json:"entryId"`
-			}
-			if err := json.Unmarshal([]byte(*stored), &res); err != nil {
-				return nil, fmt.Errorf("%w: stored idempotency result unreadable", ErrValidation)
-			}
-			e, err := s.repo.EntryByID(ctx, schoolID, res.EntryID)
-			if err != nil {
-				return nil, err
-			}
-			return e, nil
-		}
-	}
-
+	// Idempotency is single-transaction (issue #45): claim the scoped key
+	// inside the same tx as the posting. A concurrent same-key request waits
+	// on the claim and replays the winner's stored entry; a crash rolls back
+	// claim + posting together (no orphan key, no duplicate posting).
+	scope := entryIdempotencyScope(schoolID)
+	var replayStored *string
 	e := &JournalEntry{
 		ID:          uuid.NewString(),
 		SchoolID:    schoolID,
@@ -192,14 +177,45 @@ func (s *Service) PostEntry(ctx context.Context, schoolID, actorID, description,
 	for _, l := range lines {
 		e.Lines = append(e.Lines, JournalLine{AccountID: l.AccountID, DebitMinor: l.DebitMinor, CreditMinor: l.CreditMinor})
 	}
-	if err := s.repo.InsertEntry(ctx, e); err != nil {
-		return nil, err
-	}
-	if idempotencyKey != "" {
-		if err := s.repo.StoreIdempotencyKey(ctx, s.pool, idempotencyKey, []byte(`{"entryId":"`+e.ID+`"}`)); err != nil {
-			return nil, err
+
+	txErr := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		replayStored = nil
+		if idempotencyKey != "" {
+			owned, claimed, err := s.repo.ClaimIdempotencyKey(ctx, tx, scope, idempotencyKey, schoolID)
+			if err != nil {
+				return err
+			}
+			if !owned && claimed != nil {
+				// Another request (already committed) owns this key: replay.
+				var res struct {
+					EntryID string `json:"entryId"`
+				}
+				if err := json.Unmarshal([]byte(*claimed), &res); err != nil {
+					return fmt.Errorf("%w: stored idempotency result unreadable", ErrValidation)
+				}
+				owner, err := s.repo.EntryByID(ctx, schoolID, res.EntryID)
+				if err != nil {
+					return err
+				}
+				*e = *owner
+				replayStored = claimed
+				return nil
+			}
 		}
+		if err := s.repo.InsertEntryTx(ctx, tx, e); err != nil {
+			return err
+		}
+		if idempotencyKey != "" {
+			if err := s.repo.StoreIdempotencyKey(ctx, tx, scope, idempotencyKey, schoolID, []byte(`{"entryId":"`+e.ID+`"}`)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if txErr != nil {
+		return nil, txErr
 	}
+	_ = replayStored
 	return e, nil
 }
 
@@ -423,10 +439,11 @@ func (s *Service) ConfirmWebhook(ctx context.Context, schoolID string, in Confir
 	if in.EventID == "" || in.PaymentID == "" {
 		return nil, fmt.Errorf("%w: eventId and paymentId required", ErrValidation)
 	}
-	key := "webhook:" + in.EventID
+	key := in.EventID
+	scope := webhookIdempotencyScope(schoolID)
 
 	// Fast path: already processed.
-	if stored, err := s.repo.IdempotencyResult(ctx, key); err != nil {
+	if stored, err := s.repo.IdempotencyResult(ctx, scope, key); err != nil {
 		return nil, err
 	} else if stored != nil {
 		var out map[string]any
@@ -545,7 +562,7 @@ func (s *Service) ConfirmWebhook(ctx context.Context, schoolID string, in Confir
 		if merr != nil {
 			return merr
 		}
-		if err := s.repo.StoreIdempotencyKey(ctx, tx, key, result); err != nil {
+		if err := s.repo.StoreIdempotencyKey(ctx, tx, scope, key, schoolID, result); err != nil {
 			return err
 		}
 		if _, err := events.Record(ctx, tx, &schoolID, p.ID, "finance.PaymentConfirmed", 1, map[string]any{
@@ -576,7 +593,12 @@ func (s *Service) FailWebhook(ctx context.Context, schoolID, eventID, paymentID 
 	if eventID == "" || paymentID == "" {
 		return nil, fmt.Errorf("%w: eventId and paymentId required", ErrValidation)
 	}
-	key := "webhook:" + eventID
+	// The key is scoped per school (no cross-tenant namespace) and is only
+	// persisted when the failure actually applied — a late `confirmed`
+	// delivery of the same event must not be poisoned by a stale failed
+	// result (issue #45).
+	key := eventID
+	scope := webhookIdempotencyScope(schoolID)
 	if _, err := s.repo.PaymentByID(ctx, schoolID, paymentID); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, fmt.Errorf("%w: payment not found in this school", ErrNotFound)
@@ -588,8 +610,10 @@ func (s *Service) FailWebhook(ctx context.Context, schoolID, eventID, paymentID 
 		return nil, err
 	}
 	out := map[string]any{"paymentId": paymentID, "status": "failed", "applied": ok}
-	if err := s.repo.StoreIdempotencyKey(ctx, s.pool, key, []byte(`{"status":"failed"}`)); err != nil {
-		return nil, err
+	if ok {
+		if err := s.repo.StoreIdempotencyKey(ctx, s.pool, scope, key, schoolID, []byte(`{"status":"failed"}`)); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }
@@ -603,6 +627,13 @@ func (s *Service) Wallet(ctx context.Context, schoolID string) ([]*WalletBalance
 }
 
 // --- helpers ----------------------------------------------------------------
+
+// webhookIdempotencyScope / entryIdempotencyScope keep idempotency namespaces
+// per operation AND per school (issue #45): a client-posted journal-entry key
+// can never swallow a provider webhook delivery, and two schools using the
+// same provider event ids cannot collide.
+func webhookIdempotencyScope(schoolID string) string { return "finance:webhook:" + schoolID }
+func entryIdempotencyScope(schoolID string) string   { return "finance:entry:" + schoolID }
 
 func (s *Service) accountCodeToID(ctx context.Context, schoolID, code string) (string, error) {
 	a, err := s.repo.AccountByCode(ctx, schoolID, code)
