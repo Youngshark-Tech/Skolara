@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -504,5 +505,81 @@ func TestRosterRejectsCrossSchoolLearners(t *testing.T) {
 	}
 	if len(roster) != 1 || roster[0].LastName != "Student" {
 		t.Fatalf("roster should hold exactly the enrolled learner, got %d rows", len(roster))
+	}
+}
+
+// TestAcademicsDuplicateNamesAndOverlapRace guards the #50 fixes: duplicate
+// academic-year and term names map to 409 (ErrNameTaken) instead of 500; and
+// concurrent term creation for the same year serializes — no overlapping
+// terms commit.
+func TestAcademicsDuplicateNamesAndOverlapRace(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	school := mustSchool(t, f, "DUP-A", "Duplicate School")
+
+	// Duplicate year name: 409, not 500.
+	if _, err := f.svc.CreateAcademicYear(ctx, school.ID, "2026", "2026-01-01", "2026-12-31"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.CreateAcademicYear(ctx, school.ID, "2026", "2027-01-01", "2027-12-31"); !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("duplicate year name: want ErrNameTaken, got %v", err)
+	}
+
+	years, _ := f.svc.AcademicYears(ctx, school.ID)
+	var year *AcademicYear
+	for _, y := range years {
+		if y.Name == "2026" {
+			year = y
+			break
+		}
+	}
+	if year == nil {
+		t.Fatal("seeded year not found")
+	}
+	if _, err := f.svc.CreateTerm(ctx, school.ID, year.ID, "Term 1", "2026-01-01", "2026-04-30"); err != nil {
+		t.Fatal(err)
+	}
+	// Duplicate term name in the same year: 409.
+	if _, err := f.svc.CreateTerm(ctx, school.ID, year.ID, "Term 1", "2026-05-01", "2026-08-31"); !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("duplicate term name: want ErrNameTaken, got %v", err)
+	}
+	// Overlap still rejected (service invariant intact).
+	if _, err := f.svc.CreateTerm(ctx, school.ID, year.ID, "Term 2", "2026-04-01", "2026-06-30"); !errors.Is(err, ErrTermOverlap) {
+		t.Fatalf("overlap: want ErrTermOverlap, got %v", err)
+	}
+
+	// Concurrency: 8 goroutines create the SAME term window under different
+	// names — exactly one wins per inclusive-overlap policy; the rest fail
+	// with ErrTermOverlap. No overlapping pair may commit.
+	const racers = 8
+	errs := make(chan error, racers)
+	for i := 0; i < racers; i++ {
+		name := fmt.Sprintf("Raced %d", i)
+		go func() {
+			_, err := f.svc.CreateTerm(ctx, school.ID, year.ID, name, "2026-09-01", "2026-11-30")
+			errs <- err
+		}()
+	}
+	wins, overlaps := 0, 0
+	for i := 0; i < racers; i++ {
+		err := <-errs
+		switch {
+		case err == nil:
+			wins++
+		case errors.Is(err, ErrTermOverlap):
+			overlaps++
+		default:
+			t.Fatalf("unexpected term race error: %v", err)
+		}
+	}
+	if wins != 1 || overlaps != racers-1 {
+		t.Fatalf("race outcome: wins=%d overlaps=%d (want 1 / %d)", wins, overlaps, racers-1)
+	}
+	terms, err := f.svc.TermsForYear(ctx, school.ID, year.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(terms) != 2 {
+		t.Fatalf("year holds %d terms, want exactly 2 (Term 1 + 1 racer)", len(terms))
 	}
 }

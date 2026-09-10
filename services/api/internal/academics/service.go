@@ -44,6 +44,10 @@ func (s *Service) CreateAcademicYear(ctx context.Context, schoolID, name, start,
 		Status:    "planning",
 	}
 	if err := s.repo.CreateAcademicYear(ctx, schoolID, y); err != nil {
+		if isUniqueViolation(err) {
+			// unique (school, name) — same as subjects/classes (#50).
+			return nil, fmt.Errorf("%w: academic year name %q already exists", ErrNameTaken, name)
+		}
 		return nil, err
 	}
 	s.emit(ctx, schoolID, y.ID, "academics.AcademicYearCreated",
@@ -83,30 +87,53 @@ func (s *Service) CreateTerm(ctx context.Context, schoolID, yearID, name, start,
 	if start < year.StartDate || end > year.EndDate {
 		return nil, fmt.Errorf("%w: term must lie within %s..%s", ErrOutsideYear, year.StartDate, year.EndDate)
 	}
-	siblings, err := s.repo.TermsForYear(ctx, schoolID, yearID)
-	if err != nil {
-		return nil, err
-	}
-	for _, t := range siblings {
-		// Inclusive overlap: NOT (new.end < t.start OR new.start > t.end).
-		if !(end < t.StartDate || start > t.EndDate) {
-			return nil, fmt.Errorf("%w: overlaps %s (%s..%s)", ErrTermOverlap, t.Name, t.StartDate, t.EndDate)
+	var createdTerm *Term
+	// The overlap check runs inside a tx that locks the year row, so two
+	// concurrent CreateTerm calls serialize instead of both committing
+	// overlapping terms (#50). The sibling scan remains the source of truth
+	// for the policy (inclusive-bounds overlap).
+	var overlapErr error
+	txErr := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		if err := s.repo.LockAcademicYear(ctx, tx, schoolID, yearID); err != nil {
+			return err
 		}
+		siblings, err := s.repo.TermsForYearTx(ctx, tx, schoolID, yearID)
+		if err != nil {
+			return err
+		}
+		for _, t := range siblings {
+			// Inclusive overlap: NOT (new.end < t.start OR new.start > t.end).
+			if !(end < t.StartDate || start > t.EndDate) {
+				overlapErr = fmt.Errorf("%w: overlaps %s (%s..%s)", ErrTermOverlap, t.Name, t.StartDate, t.EndDate)
+				return overlapErr
+			}
+		}
+		term := &Term{
+			ID:             uuid.NewString(),
+			SchoolID:       schoolID,
+			AcademicYearID: yearID,
+			Name:           name,
+			StartDate:      start,
+			EndDate:        end,
+		}
+		if err := s.repo.CreateTermTx(ctx, tx, schoolID, term); err != nil {
+			return err
+		}
+		createdTerm = term
+		return nil
+	})
+	if overlapErr != nil {
+		return nil, overlapErr
 	}
-	term := &Term{
-		ID:             uuid.NewString(),
-		SchoolID:       schoolID,
-		AcademicYearID: yearID,
-		Name:           name,
-		StartDate:      start,
-		EndDate:        end,
+	if txErr != nil {
+		if isUniqueViolation(txErr) {
+			return nil, fmt.Errorf("%w: term name %q already exists in this year", ErrNameTaken, name)
+		}
+		return nil, txErr
 	}
-	if err := s.repo.CreateTerm(ctx, schoolID, term); err != nil {
-		return nil, err
-	}
-	s.emit(ctx, schoolID, term.ID, "academics.TermCreated",
-		map[string]any{"name": term.Name, "academic_year_id": yearID, "start_date": start, "end_date": end})
-	return term, nil
+	s.emit(ctx, schoolID, createdTerm.ID, "academics.TermCreated",
+		map[string]any{"name": createdTerm.Name, "academic_year_id": yearID, "start_date": start, "end_date": end})
+	return createdTerm, nil
 }
 
 // TermsForYear lists a year's terms.

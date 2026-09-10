@@ -82,6 +82,49 @@ func (r *pgRepo) CreateTerm(ctx context.Context, schoolID string, t *Term) error
 		Scan(&t.ID, &t.SchoolID, &t.AcademicYearID, &t.Name, &t.StartDate, &t.EndDate, &t.CreatedAt)
 }
 
+// LockAcademicYear takes a row lock (SELECT ... FOR UPDATE) on the year so
+// concurrent term creations for the same year serialize their overlap checks
+// (issue #50).
+func (r *pgRepo) LockAcademicYear(ctx context.Context, q postgres.Querier, schoolID, yearID string) error {
+	var id string
+	err := q.QueryRow(ctx,
+		`SELECT id FROM academic_years WHERE id = $1 AND school_id = $2 FOR UPDATE`,
+		yearID, schoolID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
+}
+
+// TermsForYearTx is TermsForYear on a caller-owned transaction.
+func (r *pgRepo) TermsForYearTx(ctx context.Context, q postgres.Querier, schoolID, yearID string) ([]*Term, error) {
+	rows, err := q.Query(ctx,
+		`SELECT `+termCols+` FROM terms WHERE school_id = $1 AND academic_year_id = $2 ORDER BY start_date`,
+		schoolID, yearID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*Term{}
+	for rows.Next() {
+		t := &Term{}
+		if err := rows.Scan(&t.ID, &t.SchoolID, &t.AcademicYearID, &t.Name, &t.StartDate, &t.EndDate, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// CreateTermTx is CreateTerm on a caller-owned transaction.
+func (r *pgRepo) CreateTermTx(ctx context.Context, q postgres.Querier, schoolID string, t *Term) error {
+	return q.QueryRow(ctx,
+		`INSERT INTO terms (id, school_id, academic_year_id, name, start_date, end_date)
+		 VALUES ($1,$2,$3,$4,$5::date,$6::date) RETURNING `+termCols,
+		t.ID, schoolID, t.AcademicYearID, t.Name, t.StartDate, t.EndDate).
+		Scan(&t.ID, &t.SchoolID, &t.AcademicYearID, &t.Name, &t.StartDate, &t.EndDate, &t.CreatedAt)
+}
+
 // TermsForYear returns all terms of a year; overlap policy is a service-layer
 // invariant (kept in one place with clear domain errors instead of exclusion
 // constraints requiring the btree_gist extension).

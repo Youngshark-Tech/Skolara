@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/postgres"
 )
 
 // AcademicYear is a school's named academic year with inclusive start/end
@@ -139,6 +141,9 @@ type Repo interface {
 	// Terms.
 	CreateTerm(ctx context.Context, schoolID string, t *Term) error
 	TermsForYear(ctx context.Context, schoolID, yearID string) ([]*Term, error)
+	LockAcademicYear(ctx context.Context, q postgres.Querier, schoolID, yearID string) error
+	TermsForYearTx(ctx context.Context, q postgres.Querier, schoolID, yearID string) ([]*Term, error)
+	CreateTermTx(ctx context.Context, q postgres.Querier, schoolID string, t *Term) error
 
 	// Subjects.
 	CreateSubject(ctx context.Context, schoolID string, s *Subject) error
