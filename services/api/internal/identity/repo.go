@@ -213,10 +213,20 @@ func (r *pgRepo) RevokeRefreshToken(ctx context.Context, id string) error {
 	return err
 }
 
+// MarkRefreshTokenUsed atomically claims the token. The UPDATE is guarded by
+// `used_at IS NULL`; when zero rows match (another request consumed the token
+// first — a concurrent replay) the caller gets ErrRefreshAlreadyUsed instead
+// of a silent success, closing the TOCTOU race in Refresh (issue #41).
 func (r *pgRepo) MarkRefreshTokenUsed(ctx context.Context, id string) error {
-	_, err := r.pool.Exec(ctx,
+	ct, err := r.pool.Exec(ctx,
 		`UPDATE refresh_tokens SET used_at = now() WHERE id = $1 AND used_at IS NULL`, id)
-	return err
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrRefreshAlreadyUsed
+	}
+	return nil
 }
 
 func (r *pgRepo) RevokeAllUserRefreshTokens(ctx context.Context, userID string) error {
