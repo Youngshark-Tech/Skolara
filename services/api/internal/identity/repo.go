@@ -44,7 +44,7 @@ const userCols = `id, email, name, password_hash, status, failed_login_attempts,
 func (r *pgRepo) CreateUser(ctx context.Context, u *User) error {
 	row := r.pool.QueryRow(ctx,
 		`INSERT INTO users (id, email, name, password_hash) VALUES ($1,$2,$3,$4)
-		 RETURNING `+userCols,
+                 RETURNING `+userCols,
 		u.ID, strings.ToLower(u.Email), u.Name, u.PasswordHash)
 	got, err := scanUser(row)
 	if err != nil {
@@ -132,10 +132,10 @@ func (r *pgRepo) RolesForUser(ctx context.Context, userID string) ([]string, err
 func (r *pgRepo) PermissionsForUser(ctx context.Context, userID string) (map[string]bool, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT DISTINCT p.name
-		 FROM user_roles ur
-		 JOIN role_permissions rp ON rp.role_id = ur.role_id
-		 JOIN permissions p ON p.id = rp.permission_id
-		 WHERE ur.user_id = $1`, userID)
+                 FROM user_roles ur
+                 JOIN role_permissions rp ON rp.role_id = ur.role_id
+                 JOIN permissions p ON p.id = rp.permission_id
+                 WHERE ur.user_id = $1`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +162,7 @@ func (r *pgRepo) RoleExists(ctx context.Context, name string) (bool, error) {
 func (r *pgRepo) AssignRole(ctx context.Context, userID, roleName string) error {
 	ct, err := r.pool.Exec(ctx,
 		`INSERT INTO user_roles (user_id, role_id) VALUES ($1, (SELECT id FROM roles WHERE name=$2))
-		 ON CONFLICT DO NOTHING`, userID, roleName)
+                 ON CONFLICT DO NOTHING`, userID, roleName)
 	if err != nil {
 		return err
 	}
@@ -175,7 +175,7 @@ func (r *pgRepo) AssignRole(ctx context.Context, userID, roleName string) error 
 func (r *pgRepo) CreateRefreshToken(ctx context.Context, rt *RefreshToken) error {
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO refresh_tokens (id, user_id, token_hash, family_id, expires_at, created_ip)
-		 VALUES ($1,$2,$3,$4,$5,$6)`,
+                 VALUES ($1,$2,$3,$4,$5,$6)`,
 		rt.ID, rt.UserID, rt.TokenHash, rt.FamilyID, rt.ExpiresAt, rt.CreatedIP)
 	return err
 }
@@ -194,7 +194,7 @@ func scanRefresh(row pgx.Row) (*RefreshToken, error) {
 func (r *pgRepo) RefreshTokenByHash(ctx context.Context, hash string) (*RefreshToken, error) {
 	return scanRefresh(r.pool.QueryRow(ctx,
 		`SELECT id, user_id, token_hash, family_id, expires_at, used_at, revoked_at
-		 FROM refresh_tokens WHERE token_hash = $1`, hash))
+                 FROM refresh_tokens WHERE token_hash = $1`, hash))
 }
 
 func (r *pgRepo) RevokeRefreshFamily(ctx context.Context, familyID string) error {
@@ -209,10 +209,20 @@ func (r *pgRepo) RevokeRefreshToken(ctx context.Context, id string) error {
 	return err
 }
 
+// MarkRefreshTokenUsed atomically claims the token. The UPDATE is guarded by
+// `used_at IS NULL`; when zero rows match (another request consumed the token
+// first — a concurrent replay) the caller gets ErrRefreshAlreadyUsed instead
+// of a silent success, closing the TOCTOU race in Refresh (issue #41).
 func (r *pgRepo) MarkRefreshTokenUsed(ctx context.Context, id string) error {
-	_, err := r.pool.Exec(ctx,
+	ct, err := r.pool.Exec(ctx,
 		`UPDATE refresh_tokens SET used_at = now() WHERE id = $1 AND used_at IS NULL`, id)
-	return err
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrRefreshAlreadyUsed
+	}
+	return nil
 }
 
 func (r *pgRepo) RevokeAllUserRefreshTokens(ctx context.Context, userID string) error {
@@ -244,7 +254,7 @@ func (r *pgRepo) RecordAudit(ctx context.Context, a AuditEntry) error {
 	}
 	_, err = r.pool.Exec(ctx,
 		`INSERT INTO audit_logs (actor_id, action, resource_type, resource_id, school_id, before_state, after_state, request_id, correlation_id, detail)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 		actorID, a.Action, a.ResourceType, a.ResourceID, schoolID,
 		nullableJSON(before), nullableJSON(after), a.RequestID, a.CorrelationID, nullableJSON(detail))
 	return err

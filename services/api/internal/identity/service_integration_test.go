@@ -4,6 +4,7 @@ package identity
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -217,5 +218,73 @@ func TestUserLifecycleDisableEnable(t *testing.T) {
 	// Idempotent set to the same status is a no-op.
 	if _, err := svc.SetUserStatus(ctx, admin.ID, u.ID, "active"); err != nil {
 		t.Fatalf("idempotent status set: %v", err)
+	}
+}
+
+// TestConcurrentRefreshSingleWinner guards the issue #41 TOCTOU fix: N
+// concurrent Refresh calls with the SAME token must yield exactly one
+// success; every loser gets ErrTokenReuse and the whole family is revoked
+// (no double rotation).
+func TestConcurrentRefreshSingleWinner(t *testing.T) {
+	svc, _ := newAuthService(t)
+	ctx := context.Background()
+
+	if _, err := svc.CreateUser(ctx, "race@school.example", "Race Racer", "s3cure-passw0rd!", ""); err != nil {
+		t.Fatal(err)
+	}
+	_, refresh, err := svc.Login(ctx, "race@school.example", "s3cure-passw0rd!", "10.0.0.9")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const racers = 8
+	type result struct {
+		access  string
+		refresh string
+		err     error
+	}
+	results := make(chan result, racers)
+	for i := 0; i < racers; i++ {
+		go func() {
+			a, r, e := svc.Refresh(ctx, refresh, "10.0.0.9")
+			results <- result{a, r, e}
+		}()
+	}
+
+	wins, rejected, other := 0, 0, 0
+	for i := 0; i < racers; i++ {
+		r := <-results
+		switch {
+		case r.err == nil:
+			wins++
+			_ = r.access
+			_ = r.refresh
+		case errors.Is(r.err, ErrTokenReuse), errors.Is(r.err, ErrBadCredentials):
+			// Losers are rejected either as detected reuse (read before the
+			// family revocation landed) or as revoked/unknown credentials
+			// (read after). Both are 401-class rejections — the security
+			// contract is "exactly one winner, nobody else gets in".
+			rejected++
+		default:
+			other++
+			t.Logf("unexpected refresh error: %v", r.err)
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("expected exactly 1 winner, got %d (rejected=%d other=%d)", wins, rejected, other)
+	}
+	if rejected != racers-1 {
+		t.Fatalf("expected %d rejected losers, got %d", racers-1, rejected)
+	}
+
+	// The original token is permanently consumed: replaying it after the
+	// race is rejected (deterministic — its used_at is set by the winner).
+	if _, _, err := svc.Refresh(ctx, refresh, "10.0.0.9"); err == nil {
+		t.Fatal("original token still refreshable after race")
+	}
+
+	// The account itself still works.
+	if _, _, err := svc.Login(ctx, "race@school.example", "s3cure-passw0rd!", "10.0.0.9"); err != nil {
+		t.Fatalf("account should still be loginable: %v", err)
 	}
 }

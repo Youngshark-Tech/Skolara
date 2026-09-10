@@ -47,6 +47,12 @@ var (
 	ErrAccountDisabled = errors.New("identity: account disabled")
 	ErrTokenReuse      = errors.New("identity: refresh token reuse detected")
 	ErrEmailTaken      = errors.New("identity: email already registered")
+
+	// ErrRefreshAlreadyUsed is returned by the repo when the atomic
+	// mark-used UPDATE matched no rows (token already consumed by a
+	// concurrent refresh). Callers treat it exactly like the sequential
+	// reuse path: revoke the family, return ErrTokenReuse (issue #41).
+	ErrRefreshAlreadyUsed = errors.New("identity: refresh token already used")
 )
 
 // Login authenticates, applying lockout policy, and returns an access token
@@ -140,8 +146,14 @@ func (s *AuthService) Refresh(ctx context.Context, rawToken, ip string) (string,
 	}
 
 	// Mark used (not revoked) so a replay is DETECTABLE as reuse —
-	// which then revokes the whole family (ADR-007).
+	// which then revokes the whole family (ADR-007). The UPDATE is
+	// guarded by `used_at IS NULL`; racing it returns
+	// ErrRefreshAlreadyUsed so concurrent reuse is caught too (#41).
 	if err := s.repo.MarkRefreshTokenUsed(ctx, rt.ID); err != nil {
+		if errors.Is(err, ErrRefreshAlreadyUsed) {
+			_ = s.repo.RevokeRefreshFamily(ctx, rt.FamilyID)
+			return "", "", ErrTokenReuse
+		}
 		return "", "", err
 	}
 	roles, err := s.repo.RolesForUser(ctx, u.ID)
