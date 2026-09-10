@@ -202,7 +202,8 @@ func (r *pgRepo) ListEnrollments(ctx context.Context, schoolID string, status *E
 	rows, err := r.pool.Query(ctx,
 		`SELECT `+enrollmentCols+` FROM enrollments
                  WHERE school_id = $1 AND ($2::text IS NULL OR status = $2::text)
-                 ORDER BY created_at DESC`, schoolID, s)
+                 ORDER BY created_at DESC
+                 LIMIT $3 OFFSET $4`, schoolID, s, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/events"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/postgres"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Service implements students business rules.
@@ -232,15 +233,26 @@ func (s *Service) EnrollLearner(ctx context.Context, schoolID string, in Enrollm
 		StartedAt: ptrTime(time.Now().UTC()),
 	}
 	if in.ClassGroupID != "" {
+		if _, err := uuid.Parse(in.ClassGroupID); err != nil {
+			return nil, fmt.Errorf("%w: classGroupId must be a UUID", ErrValidation)
+		}
 		e.ClassGroupID = &in.ClassGroupID
 	}
 	if in.AcademicYearID != "" {
+		if _, err := uuid.Parse(in.AcademicYearID); err != nil {
+			return nil, fmt.Errorf("%w: academicYearId must be a UUID", ErrValidation)
+		}
 		e.AcademicYearID = &in.AcademicYearID
 	}
 	if err := s.repo.CreateEnrollment(ctx, e); err != nil {
 		if isUniqueViolation(err) {
 			// Backstop for the partial unique index on open enrollments.
 			return nil, ErrAlreadyEnrolled
+		}
+		if isFKViolation(err) {
+			// classGroupId / academicYearId carry FKs (academics 000005):
+			// unknown references are a client error, not a 500 (#47).
+			return nil, fmt.Errorf("%w: classGroupId or academicYearId does not exist", ErrValidation)
 		}
 		return nil, err
 	}
@@ -334,6 +346,14 @@ func validEmail(e string) bool {
 	}
 	at := strings.Index(e, "@")
 	return at > 0 && at < len(e)-1 && !strings.Contains(e[at+1:], "@")
+}
+
+func isFKViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23503"
+	}
+	return false
 }
 
 func isUniqueViolation(err error) bool {

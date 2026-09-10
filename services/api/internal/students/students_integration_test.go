@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -603,5 +604,70 @@ func TestLearnerPagination(t *testing.T) {
 	// Pages do not overlap and preserve ordering.
 	if page1[0].ID == page2[0].ID {
 		t.Fatal("page overlap")
+	}
+}
+
+// TestEnrollmentPagination guards the issue #47 fix: ListEnrollments must
+// honor limit/offset (the query previously omitted LIMIT/OFFSET and returned
+// every enrollment while echoing pagination in the envelope).
+func TestEnrollmentPagination(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	school := mustSchool(t, f, "PAG-E", "Enrollment Pag School")
+
+	for i := 0; i < 5; i++ {
+		l := mustLearner(t, f, school.ID, fmt.Sprintf("Pag%d", i), "Learner")
+		if _, err := f.svc.EnrollLearner(ctx, school.ID, EnrollmentInput{LearnerID: l.ID, Status: "admitted"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	page1, total, err := f.svc.ListEnrollments(ctx, school.ID, nil, 2, 0)
+	if err != nil || total != 5 || len(page1) != 2 {
+		t.Fatalf("page1: n=%d total=%d err=%v", len(page1), total, err)
+	}
+	page2, _, err := f.svc.ListEnrollments(ctx, school.ID, nil, 2, 2)
+	if err != nil || len(page2) != 2 {
+		t.Fatalf("page2: n=%d err=%v", len(page2), err)
+	}
+	page3, _, err := f.svc.ListEnrollments(ctx, school.ID, nil, 2, 4)
+	if err != nil || len(page3) != 1 {
+		t.Fatalf("page3: n=%d err=%v", len(page3), err)
+	}
+	// No overlap across pages.
+	seen := map[string]bool{}
+	for _, e := range append(append(page1, page2...), page3...) {
+		if seen[e.ID] {
+			t.Fatalf("enrollment %s appears on two pages", e.ID)
+		}
+		seen[e.ID] = true
+	}
+}
+
+// TestEnrollLearnerBadReferences guards the #47 500-fix: malformed or unknown
+// classGroupId/academicYearId are client errors (ErrValidation), not 500s.
+func TestEnrollLearnerBadReferences(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	school := mustSchool(t, f, "FK-E", "Enroll FK School")
+	l := mustLearner(t, f, school.ID, "Ref", "Err")
+
+	// Non-UUID classGroupId -> validation error before hitting the DB.
+	if _, err := f.svc.EnrollLearner(ctx, school.ID, EnrollmentInput{
+		LearnerID: l.ID, Status: "admitted", ClassGroupID: "not-a-uuid",
+	}); err == nil || !strings.Contains(err.Error(), "classGroupId") {
+		t.Fatalf("non-uuid classGroup: %v", err)
+	}
+	// Non-UUID academicYearId -> validation error.
+	if _, err := f.svc.EnrollLearner(ctx, school.ID, EnrollmentInput{
+		LearnerID: l.ID, Status: "admitted", AcademicYearID: "nope",
+	}); err == nil {
+		t.Fatal("non-uuid academicYear accepted")
+	}
+	// Valid UUID but unknown class -> FK mapped to ErrValidation (400), not 500.
+	if _, err := f.svc.EnrollLearner(ctx, school.ID, EnrollmentInput{
+		LearnerID: l.ID, Status: "admitted", ClassGroupID: "00000000-0000-0000-0000-0000000000f1",
+	}); err == nil || !errors.Is(err, ErrValidation) {
+		t.Fatalf("unknown classGroup should map to ErrValidation, got %v", err)
 	}
 }
