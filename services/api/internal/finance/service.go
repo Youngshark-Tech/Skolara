@@ -328,19 +328,25 @@ func (s *Service) Invoices(ctx context.Context, schoolID string, status *Invoice
 }
 
 // VoidInvoice voids an open invoice (no allocations allowed).
+// VoidInvoice voids an invoice with no allocations. The void is a single
+// guarded statement (issue #46): there is no read-check-write window for a
+// concurrent confirmation to slip an allocation past. Semantics: unknown id →
+// ErrNotFound (404); already void → idempotent success; has allocations →
+// ErrNotAllocatable (409).
 func (s *Service) VoidInvoice(ctx context.Context, schoolID, id string) (*Invoice, error) {
-	inv, err := s.repo.InvoiceByID(ctx, schoolID, id)
+	applied, err := s.repo.VoidInvoiceGuarded(ctx, s.pool, schoolID, id)
 	if err != nil {
 		return nil, err
 	}
-	if inv.Status == InvoiceVoid {
-		return inv, nil
-	}
-	if inv.PaidMinor > 0 {
-		return nil, fmt.Errorf("%w: invoice has allocations", ErrNotAllocatable)
-	}
-	if err := s.repo.SetInvoiceStatus(ctx, s.pool, schoolID, id, InvoiceVoid); err != nil {
-		return nil, err
+	if !applied {
+		inv, gerr := s.repo.InvoiceByID(ctx, schoolID, id)
+		if gerr != nil {
+			return nil, gerr // includes ErrNotFound (404)
+		}
+		if inv.Status != InvoiceVoid {
+			return nil, fmt.Errorf("%w: invoice has allocations", ErrNotAllocatable)
+		}
+		return inv, nil // already void: idempotent success
 	}
 	return s.repo.InvoiceByID(ctx, schoolID, id)
 }

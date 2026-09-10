@@ -331,6 +331,23 @@ func (r *pgRepo) SetInvoiceStatus(ctx context.Context, q postgres.Querier, schoo
 	return nil
 }
 
+// VoidInvoiceGuarded voids an invoice in a single guarded statement: the
+// WHERE clause re-evaluates against the locked row, so a confirmation that
+// holds the invoice row lock (SELECT ... FOR UPDATE before allocating) either
+// commits first — and the void then sees its allocation and refuses — or
+// waits and finds the invoice void (issue #46).
+func (r *pgRepo) VoidInvoiceGuarded(ctx context.Context, q postgres.Querier, schoolID, id string) (bool, error) {
+	tag, err := q.Exec(ctx,
+		`UPDATE invoices SET status = 'void'
+		 WHERE id = $1 AND school_id = $2 AND status <> 'void'
+		   AND NOT EXISTS (SELECT 1 FROM payment_allocations a WHERE a.invoice_id = invoices.id)`,
+		id, schoolID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // --- payments ---------------------------------------------------------------
 
 func (r *pgRepo) InsertPayment(ctx context.Context, p *Payment) error {

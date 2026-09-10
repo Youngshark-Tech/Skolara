@@ -238,6 +238,12 @@ type Repo interface {
 	// escaped the confirmation tx and could persist paid/partially_paid while
 	// the postings rolled back).
 	SetInvoiceStatus(ctx context.Context, q postgres.Querier, schoolID, id string, status InvoiceStatus) error
+	// VoidInvoiceGuarded voids atomically: refuses invoices that already hold
+	// allocations or are already void (single guarded statement — no
+	// read-check-write race with concurrent confirmations, issue #46).
+	// Returns false when nothing was updated (caller resolves 404 vs
+	// idempotent vs 409 semantics).
+	VoidInvoiceGuarded(ctx context.Context, q postgres.Querier, schoolID, id string) (bool, error)
 
 	// Payments.
 	InsertPayment(ctx context.Context, p *Payment) error

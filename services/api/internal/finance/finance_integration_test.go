@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -933,5 +934,65 @@ func TestWebhookIdempotencyIsolatedAcrossSchools(t *testing.T) {
 		if err != nil || got.Status != InvoicePaid {
 			t.Fatalf("invoice %s not paid: %v %+v", inv.ID, err, got)
 		}
+	}
+}
+
+// TestVoidInvoiceGuardsSemantics guards the issue #46 single-statement void:
+// 404 for unknown, idempotent success for already-void, 409 when allocations
+// exist. The guarded UPDATE also eliminates the read-check-write window where
+// a concurrent confirmation could allocate between the old read and status
+// write (structurally impossible now: one statement against the locked row,
+// with the confirmation's FOR UPDATE serializing both orders).
+func TestVoidInvoiceGuardsSemantics(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	school := mustSchool(t, f, "FIN-VG", "Void Guard School")
+	learner := seedLearner(t, f, "Void", "Guard")
+
+	mkInvoice := func() *Invoice {
+		inv, err := f.svc.CreateInvoice(ctx, school.ID, "", CreateInvoiceInput{
+			LearnerID: learner,
+			DueDate:   time.Now().UTC().Add(72 * time.Hour).Format("2006-01-02"),
+			Lines:     []InvoiceLineInput{{Description: "Tuition", AmountMinor: 400_000}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return inv
+	}
+
+	// Unknown id -> 404 semantics.
+	if _, err := f.svc.VoidInvoice(ctx, school.ID, "00000000-0000-0000-0000-00000000000d"); err != ErrNotFound {
+		t.Fatalf("unknown invoice void: %v", err)
+	}
+
+	// Unpaid invoice -> void; void again -> idempotent success.
+	inv := mkInvoice()
+	v1, err := f.svc.VoidInvoice(ctx, school.ID, inv.ID)
+	if err != nil || v1.Status != InvoiceVoid {
+		t.Fatalf("void: %v %+v", err, v1)
+	}
+	v2, err := f.svc.VoidInvoice(ctx, school.ID, inv.ID)
+	if err != nil || v2.Status != InvoiceVoid {
+		t.Fatalf("idempotent void: %v %+v", err, v2)
+	}
+
+	// Invoice WITH allocations -> 409 ErrNotAllocatable.
+	inv2 := mkInvoice()
+	p, err := f.svc.CreatePayment(ctx, school.ID, CreatePaymentInput{
+		InvoiceID: inv2.ID, PayerRef: "g-vg", AmountMinor: 100_000, Provider: "mpesa", ProviderRef: "VG-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.ConfirmWebhook(ctx, school.ID, ConfirmWebhookInput{
+		EventID: "vg-evt-1", PaymentID: p.ID, Status: "confirmed", ProviderRef: "VG-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.VoidInvoice(ctx, school.ID, inv2.ID); err == nil {
+		t.Fatal("void succeeded on allocated invoice")
+	} else if !errors.Is(err, ErrNotAllocatable) {
+		t.Fatalf("expected ErrNotAllocatable, got %v", err)
 	}
 }
