@@ -223,8 +223,17 @@ type Repo interface {
 	// Invoices.
 	InsertInvoice(ctx context.Context, inv *Invoice) error
 	InvoiceByID(ctx context.Context, schoolID, id string) (*Invoice, error)
+	// InvoiceByIDForUpdate locks the invoice row (SELECT ... FOR UPDATE) for
+	// use inside the confirmation transaction — serializes concurrent
+	// confirmations per invoice so allocations can never exceed the balance
+	// (issue #44).
+	InvoiceByIDForUpdate(ctx context.Context, q postgres.Querier, schoolID, id string) (*Invoice, error)
 	ListInvoices(ctx context.Context, schoolID string, status *InvoiceStatus, learnerID string, limit, offset int) ([]*Invoice, int, error)
-	SetInvoiceStatus(ctx context.Context, schoolID, id string, status InvoiceStatus) error
+	// SetInvoiceStatus executes on the supplied Querier so the status write
+	// participates in the caller's transaction (issue #44: a pool write
+	// escaped the confirmation tx and could persist paid/partially_paid while
+	// the postings rolled back).
+	SetInvoiceStatus(ctx context.Context, q postgres.Querier, schoolID, id string, status InvoiceStatus) error
 
 	// Payments.
 	InsertPayment(ctx context.Context, p *Payment) error

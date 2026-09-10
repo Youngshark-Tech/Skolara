@@ -239,6 +239,14 @@ func (r *pgRepo) InvoiceByID(ctx context.Context, schoolID, id string) (*Invoice
 		`SELECT `+invoiceDerived+` FROM invoices i WHERE i.id = $1 AND i.school_id = $2`, id, schoolID))
 }
 
+// InvoiceByIDForUpdate is the transaction-scoped read used by ConfirmWebhook:
+// the row lock serializes concurrent confirmations on the same invoice so the
+// allocation cap is computed from committed state (issue #44).
+func (r *pgRepo) InvoiceByIDForUpdate(ctx context.Context, q postgres.Querier, schoolID, id string) (*Invoice, error) {
+	return scanInvoice(q.QueryRow(ctx,
+		`SELECT `+invoiceDerived+` FROM invoices i WHERE i.id = $1 AND i.school_id = $2 FOR UPDATE`, id, schoolID))
+}
+
 func (r *pgRepo) ListInvoices(ctx context.Context, schoolID string, status *InvoiceStatus, learnerID string, limit, offset int) ([]*Invoice, int, error) {
 	var st any
 	if status != nil {
@@ -276,8 +284,8 @@ func (r *pgRepo) ListInvoices(ctx context.Context, schoolID string, status *Invo
 	return out, total, rows.Err()
 }
 
-func (r *pgRepo) SetInvoiceStatus(ctx context.Context, schoolID, id string, status InvoiceStatus) error {
-	tag, err := r.pool.Exec(ctx,
+func (r *pgRepo) SetInvoiceStatus(ctx context.Context, q postgres.Querier, schoolID, id string, status InvoiceStatus) error {
+	tag, err := q.Exec(ctx,
 		`UPDATE invoices SET status = $3 WHERE id = $1 AND school_id = $2`, id, schoolID, string(status))
 	if err != nil {
 		return err
