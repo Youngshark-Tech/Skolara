@@ -584,3 +584,152 @@ func TestFinanceHTTPFlow(t *testing.T) {
 		t.Fatalf("accounts: %d", rr.Code)
 	}
 }
+
+// TestConcurrentConfirmationsNeverOverAllocate guards the issue #44 fix: two
+// payments confirmed CONCURRENTLY against the same invoice must allocate
+// exactly the invoice total (no double-allocation), leave the invoice paid,
+// and keep the full wallet inflow for both payments. On main, both
+// confirmations read the full balance outside the tx snapshot and both
+// allocate it (corruption the DB trigger now also blocks).
+func TestConcurrentConfirmationsNeverOverAllocate(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	school := mustSchool(t, f, "FIN-RACE", "Race School")
+	learner := seedLearner(t, f, "Con", "Current")
+
+	const total = 1_000_000
+	inv, err := f.svc.CreateInvoice(ctx, school.ID, "", CreateInvoiceInput{
+		LearnerID: learner,
+		DueDate:   time.Now().UTC().Add(72 * time.Hour).Format("2006-01-02"),
+		Lines:     []InvoiceLineInput{{Description: "Tuition", AmountMinor: total}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p1, err := f.svc.CreatePayment(ctx, school.ID, CreatePaymentInput{
+		InvoiceID: inv.ID, PayerRef: "g-1", AmountMinor: total, Provider: "mpesa", ProviderRef: "RACE-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := f.svc.CreatePayment(ctx, school.ID, CreatePaymentInput{
+		InvoiceID: inv.ID, PayerRef: "g-2", AmountMinor: total, Provider: "mpesa", ProviderRef: "RACE-2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type res struct{ err error }
+	results := make(chan res, 2)
+	go func() {
+		_, err := f.svc.ConfirmWebhook(ctx, school.ID, ConfirmWebhookInput{
+			EventID: "race-evt-1", PaymentID: p1.ID, Status: "confirmed", ProviderRef: "RACE-1",
+		})
+		results <- res{err}
+	}()
+	go func() {
+		_, err := f.svc.ConfirmWebhook(ctx, school.ID, ConfirmWebhookInput{
+			EventID: "race-evt-2", PaymentID: p2.ID, Status: "confirmed", ProviderRef: "RACE-2",
+		})
+		results <- res{err}
+	}()
+	for i := 0; i < 2; i++ {
+		if r := <-results; r.err != nil {
+			t.Fatalf("concurrent confirmation failed: %v", r.err)
+		}
+	}
+
+	// Allocations sum to the invoice total exactly.
+	var allocated int64
+	if err := f.pool.QueryRow(ctx,
+		`SELECT COALESCE(SUM(amount_minor),0) FROM payment_allocations WHERE invoice_id=$1`, inv.ID).Scan(&allocated); err != nil {
+		t.Fatal(err)
+	}
+	if allocated != total {
+		t.Fatalf("OVER-ALLOCATED: %d allocated, invoice total %d", allocated, total)
+	}
+
+	// Invoice is paid with balance 0.
+	inv2, err := f.svc.Invoice(ctx, school.ID, inv.ID)
+	if err != nil || inv2.Status != InvoicePaid || inv2.PaidMinor != total || inv2.BalanceMinor != 0 {
+		t.Fatalf("invoice after race: %v %+v", err, inv2)
+	}
+
+	// Wallet holds the full inflow of BOTH payments (overpayment stays on
+	// the wallet, never vanishes).
+	walletMain := mustAccount(t, f, school.ID, "wallet_main")
+	if got := accountBalance(t, f, walletMain.ID); got != 2*total {
+		t.Fatalf("wallet_main = %d, want %d", got, 2*total)
+	}
+
+	// Debits still equal credits globally.
+	var d, c int64
+	if err := f.pool.QueryRow(ctx,
+		`SELECT COALESCE(SUM(debit_minor),0), COALESCE(SUM(credit_minor),0) FROM journal_lines`).Scan(&d, &c); err != nil {
+		t.Fatal(err)
+	}
+	if d != c {
+		t.Fatalf("ledger unbalanced after race: %d vs %d", d, c)
+	}
+}
+
+// TestConfirmRollbackKeepsInvoiceConsistent guards the tx-scoped invoice
+// status write (#44): a confirmation that fails mid-transaction (voided
+// invoice => ErrNotAllocatable) must roll back posting, allocation AND
+// invoice status — no partially-applied money state.
+func TestConfirmRollbackKeepsInvoiceConsistent(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	school := mustSchool(t, f, "FIN-RB", "Rollback School")
+	learner := seedLearner(t, f, "Roll", "Back")
+
+	inv, err := f.svc.CreateInvoice(ctx, school.ID, "", CreateInvoiceInput{
+		LearnerID: learner,
+		DueDate:   time.Now().UTC().Add(72 * time.Hour).Format("2006-01-02"),
+		Lines:     []InvoiceLineInput{{Description: "Tuition", AmountMinor: 500_000}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.svc.CreatePayment(ctx, school.ID, CreatePaymentInput{
+		InvoiceID: inv.ID, PayerRef: "g-rb", AmountMinor: 500_000, Provider: "mpesa", ProviderRef: "RB-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.VoidInvoice(ctx, school.ID, inv.ID); err != nil {
+		t.Fatalf("void: %v", err)
+	}
+
+	// Confirmation must fail (not allocatable) — and leave NOTHING behind.
+	if _, err := f.svc.ConfirmWebhook(ctx, school.ID, ConfirmWebhookInput{
+		EventID: "rb-evt-1", PaymentID: p.ID, Status: "confirmed", ProviderRef: "RB-1",
+	}); err == nil {
+		t.Fatal("confirmation against void invoice succeeded")
+	}
+
+	var entries, allocations int
+	if err := f.pool.QueryRow(ctx,
+		`SELECT count(*) FROM journal_entries WHERE source='payment' AND source_ref=$1`, p.ID).Scan(&entries); err != nil {
+		t.Fatal(err)
+	}
+	if entries != 0 {
+		t.Fatalf("posting survived rollback: %d", entries)
+	}
+	if err := f.pool.QueryRow(ctx,
+		`SELECT count(*) FROM payment_allocations WHERE payment_id=$1`, p.ID).Scan(&allocations); err != nil {
+		t.Fatal(err)
+	}
+	if allocations != 0 {
+		t.Fatalf("allocation survived rollback: %d", allocations)
+	}
+	// Payment stays pending (its CAS was rolled back with the tx).
+	var status string
+	if err := f.pool.QueryRow(ctx, `SELECT status FROM payments WHERE id=$1`, p.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" {
+		t.Fatalf("payment status after rollback = %s, want pending", status)
+	}
+}

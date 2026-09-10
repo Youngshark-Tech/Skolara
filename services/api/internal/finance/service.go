@@ -323,7 +323,7 @@ func (s *Service) VoidInvoice(ctx context.Context, schoolID, id string) (*Invoic
 	if inv.PaidMinor > 0 {
 		return nil, fmt.Errorf("%w: invoice has allocations", ErrNotAllocatable)
 	}
-	if err := s.repo.SetInvoiceStatus(ctx, schoolID, id, InvoiceVoid); err != nil {
+	if err := s.repo.SetInvoiceStatus(ctx, s.pool, schoolID, id, InvoiceVoid); err != nil {
 		return nil, err
 	}
 	return s.repo.InvoiceByID(ctx, schoolID, id)
@@ -499,14 +499,23 @@ func (s *Service) ConfirmWebhook(ctx context.Context, schoolID string, in Confir
 
 		// Allocation + invoice status (when attached to an invoice).
 		if p.InvoiceID != nil && *p.InvoiceID != "" {
-			inv, gerr := s.repo.InvoiceByID(ctx, schoolID, *p.InvoiceID)
+			// Lock the invoice row: concurrent confirmations serialize here.
+			// The FOR UPDATE read's aggregate subqueries may still see a
+			// pre-lock snapshot, so the allocatable cap is recomputed from a
+			// FRESH statement (AllocatedMinor) after the lock — it sees every
+			// allocation committed by the tx we just waited on (#44).
+			inv, gerr := s.repo.InvoiceByIDForUpdate(ctx, tx, schoolID, *p.InvoiceID)
 			if gerr != nil {
 				return gerr
 			}
 			if inv.Status == InvoiceVoid {
 				return ErrNotAllocatable
 			}
-			allocatable := inv.BalanceMinor
+			paidLocked, gerr := s.repo.AllocatedMinor(ctx, tx, inv.ID)
+			if gerr != nil {
+				return gerr
+			}
+			allocatable := inv.TotalMinor - paidLocked
 			if allocatable > 0 {
 				apply := p.AmountMinor
 				if apply > allocatable {
@@ -523,7 +532,7 @@ func (s *Service) ConfirmWebhook(ctx context.Context, schoolID string, in Confir
 				if paid >= inv.TotalMinor {
 					status = InvoicePaid
 				}
-				if err := s.repo.SetInvoiceStatus(ctx, schoolID, inv.ID, status); err != nil {
+				if err := s.repo.SetInvoiceStatus(ctx, tx, schoolID, inv.ID, status); err != nil {
 					return err
 				}
 				out["invoiceId"] = inv.ID
