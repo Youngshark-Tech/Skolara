@@ -23,7 +23,7 @@ func TestLoginRefreshLogoutFlow(t *testing.T) {
 	svc, _ := newAuthService(t)
 	ctx := context.Background()
 
-	_, err := svc.CreateUser(ctx, "teacher@school.example", "Ada Teacher", "s3cure-passw0rd!", "teacher")
+	_, err := svc.CreateUser(ctx, "teacher@school.example", "Ada Teacher", "s3cure-passw0rd!", "group_admin")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestLoginRefreshLogoutFlow(t *testing.T) {
 	}
 
 	// Wrong password
-	if _, _, err := svc.Login(ctx, "teacher@school.example", "wrong", "10.0.0.1"); err != ErrBadCredentials {
+	if _, _, err := svc.Login(ctx, "teacher@school.example", "s3cure-passw0rd!-x", "10.0.0.1"); err != ErrBadCredentials {
 		t.Fatalf("expected ErrBadCredentials, got %v", err)
 	}
 
@@ -66,7 +66,7 @@ func TestLoginRefreshLogoutFlow(t *testing.T) {
 func TestLoginLockout(t *testing.T) {
 	svc, _ := newAuthService(t)
 	ctx := context.Background()
-	_, err := svc.CreateUser(ctx, "student@school.example", "Bo Student", "s3cure-passw0rd!", "student")
+	_, err := svc.CreateUser(ctx, "student@school.example", "Bo Student", "s3cure-passw0rd!", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,10 @@ func TestDuplicateEmailRejected(t *testing.T) {
 func TestPermissionsResolveFromRoles(t *testing.T) {
 	svc, _ := newAuthService(t)
 	ctx := context.Background()
-	u, err := svc.CreateUser(ctx, "fin@school.example", "Fay Finance", "s3cure-passw0rd!", "finance_officer")
+	// platform_admin is the only seed role that spans every permission via the
+	// identity route; school-scope roles cannot be assigned through identity
+	// (issue #40) — school permissions arrive exclusively via memberships.
+	u, err := svc.CreateUser(ctx, "finops@skolara.test", "Fay Ops", "s3cure-passw0rd!", "platform_admin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,10 +116,50 @@ func TestPermissionsResolveFromRoles(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !perms["finance.read"] || !perms["finance.manage"] {
-		t.Fatalf("finance officer missing finance perms: %v", perms)
+		t.Fatalf("platform admin missing finance perms: %v", perms)
 	}
-	if perms["user.manage"] {
-		t.Fatal("finance officer has user.manage")
+	if !perms["user.manage"] {
+		t.Fatal("platform admin missing user.manage")
+	}
+}
+
+// TestIdentityAssignsPlatformRolesOnly guards the issue #40 privilege-escalation
+// fix: the identity user-role route may only assign PLATFORM-scope roles.
+// School-scoped roles must be rejected (they are granted via tenancy
+// memberships), so a membership-derived user.manage cannot grant itself
+// school roles globally — and vice versa the tenancy route cannot grant
+// platform roles (covered in the tenancy suite).
+func TestIdentityAssignsPlatformRolesOnly(t *testing.T) {
+	svc, pool := newAuthService(t)
+	ctx := context.Background()
+	u, err := svc.CreateUser(ctx, "scoped-roles@skolara.test", "Scope Guard", "s3cure-passw0rd!", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// School-scope roles are rejected.
+	for _, role := range []string{"teacher", "school_admin", "finance_officer", "student"} {
+		if err := svc.AssignRole(ctx, u.ID, u.ID, role); err == nil {
+			t.Fatalf("school-scope role %q accepted by identity", role)
+		}
+	}
+	// Unknown roles still rejected.
+	if err := svc.AssignRole(ctx, u.ID, u.ID, "definitely_not_a_role"); err == nil {
+		t.Fatal("unknown role accepted")
+	}
+	// Platform roles remain assignable.
+	if err := svc.AssignRole(ctx, u.ID, u.ID, "group_admin"); err != nil {
+		t.Fatalf("platform role assignment: %v", err)
+	}
+
+	// DB trigger backstop: raw SQL insert of a school role into user_roles fails.
+	var roleID string
+	if err := pool.QueryRow(ctx, `SELECT id FROM roles WHERE name='teacher'`).Scan(&roleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)`, u.ID, roleID); err == nil {
+		t.Fatal("DB trigger did not reject school-scope role in user_roles")
 	}
 }
 
@@ -151,10 +194,10 @@ func TestAssignRoleReferenceErrors(t *testing.T) {
 	if err := svc.AssignRole(ctx, u.ID, u.ID, "definitely_not_a_role"); err == nil {
 		t.Fatal("unknown role accepted")
 	}
-	if err := svc.AssignRole(ctx, u.ID, "00000000-0000-0000-0000-000000000008", "teacher"); err == nil {
+	if err := svc.AssignRole(ctx, u.ID, "00000000-0000-0000-0000-000000000008", "group_admin"); err == nil {
 		t.Fatal("unknown user accepted")
 	}
-	if err := svc.AssignRole(ctx, u.ID, u.ID, "teacher"); err != nil {
+	if err := svc.AssignRole(ctx, u.ID, u.ID, "group_admin"); err != nil {
 		t.Fatalf("valid assignment: %v", err)
 	}
 }

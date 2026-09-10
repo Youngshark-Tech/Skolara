@@ -289,3 +289,60 @@ func TestAddMemberReferenceErrors(t *testing.T) {
 		t.Fatalf("valid member add: %v", err)
 	}
 }
+
+// TestMembershipRejectsPlatformRoles guards the issue #40 privilege-escalation
+// chain: platform-scope roles (platform_admin, group_admin) must never be
+// grantable as school memberships. The service rejects them (400 semantics)
+// and the DB trigger backstops raw SQL writes.
+func TestMembershipRejectsPlatformRoles(t *testing.T) {
+	svc, authSvc, pool := newTenancyFixture(t)
+	ctx := context.Background()
+
+	school, err := svc.CreateSchool(ctx, "SCOPE-S", "Scope School", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := seedUsers(t, authSvc, "escalator@skolara.test")
+	userID := ids["escalator@skolara.test"]
+
+	// Platform roles rejected by the service.
+	for _, role := range []string{"platform_admin", "group_admin"} {
+		if err := svc.AddMember(ctx, school.ID, userID, role); err == nil {
+			t.Fatalf("platform role %q accepted as school membership", role)
+		}
+	}
+	// No membership row was created.
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM school_memberships WHERE user_id=$1 AND school_id=$2`,
+		userID, school.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("membership rows created for platform roles: %d", count)
+	}
+
+	// DB trigger backstop: raw SQL insert of platform_admin fails.
+	var platformRoleID string
+	if err := pool.QueryRow(ctx, `SELECT id FROM roles WHERE name='platform_admin'`).Scan(&platformRoleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO school_memberships (user_id, school_id, role, status) VALUES ($1, $2, $3, 'active')`,
+		userID, school.ID, platformRoleID); err == nil {
+		t.Fatal("DB trigger did not reject platform role in school_memberships")
+	}
+
+	// A legacy/hand-crafted platform membership contributes zero permissions
+	// (defense-in-depth join filters scope='school').
+	if err := pool.QueryRow(ctx, `SELECT scope FROM roles WHERE id=$1`, platformRoleID).Scan(new(string)); err != nil {
+		t.Fatal(err)
+	}
+	perms, err := svc.PermissionsFor(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(perms) != 0 {
+		t.Fatalf("expected zero membership permissions without school role, got %v", perms)
+	}
+}
