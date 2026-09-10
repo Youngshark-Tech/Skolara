@@ -416,3 +416,39 @@ func TestConcurrentFailedLoginsExactLockout(t *testing.T) {
 		t.Fatalf("expected locked, got %s", status)
 	}
 }
+
+// TestCreateUserUnknownRoleNoUserRow guards the issue #53 atomicity fix: an
+// unknown role is rejected BEFORE any write and leaves NO user row behind
+// (previously the user committed, then the role grant 500'd).
+func TestCreateUserUnknownRoleNoUserRow(t *testing.T) {
+	svc, pool := newAuthService(t)
+	ctx := context.Background()
+
+	u, err := svc.CreateUser(ctx, "ghost-role@school.example", "Ghost Role", "s3cure-passw0rd!", "definitely_not_a_role")
+	if err == nil {
+		t.Fatal("unknown role accepted")
+	}
+	_ = u
+
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM users WHERE email='ghost-role@school.example'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("user row persisted despite failed role grant: %d", count)
+	}
+
+	// Valid role still provisions user + role atomically.
+	if _, err := svc.CreateUser(ctx, "with-role@school.example", "With Role", "s3cure-passw0rd!", "platform_admin"); err != nil {
+		t.Fatal(err)
+	}
+	var roles int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM user_roles ur JOIN users u ON u.id=ur.user_id WHERE u.email='with-role@school.example'`).Scan(&roles); err != nil {
+		t.Fatal(err)
+	}
+	if roles != 1 {
+		t.Fatalf("role grant rows = %d, want 1", roles)
+	}
+}

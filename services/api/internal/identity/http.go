@@ -74,7 +74,13 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	h.auditLogin(r, "", req.Email, nil)
+	if claims, verr := h.jwt.Verify(access); verr == nil {
+		// Audit the login with the actor identified — the most important
+		// audit event no longer loses its actor (#53).
+		h.auditLogin(r, claims.UserID, req.Email, nil)
+	} else {
+		h.auditLogin(r, "", req.Email, nil)
+	}
 	h.setRefreshCookie(w, refresh)
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"accessToken": access,
@@ -95,6 +101,7 @@ func (h *Handler) auditLogin(r *http.Request, actor, email string, err error) {
 		Action:       action,
 		ResourceType: "user",
 		ResourceID:   email,
+		RequestID:    httpx.RequestID(r.Context()),
 		Detail:       detail,
 	})
 }

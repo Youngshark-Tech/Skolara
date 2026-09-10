@@ -226,17 +226,26 @@ func (s *AuthService) CreateUser(ctx context.Context, email, name, password, rol
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, err.Error())
 	}
-	u := &User{ID: NewID(), Email: email, Name: name, PasswordHash: hash, Status: StatusActive}
-	if err := s.repo.CreateUser(ctx, u); err != nil {
-		if strings.Contains(err.Error(), "already registered") {
-			return nil, ErrEmailTaken
-		}
-		return nil, err
-	}
+	// Role validated BEFORE any write (issue #53): an unknown role used to
+	// surface as a 500 AFTER the user row had already committed. The role
+	// grant also runs in the same transaction as the user insert so the
+	// pair is atomic.
 	if roleName != "" {
-		if err := s.repo.AssignRole(ctx, u.ID, roleName); err != nil {
+		ok, err := s.repo.RoleExists(ctx, roleName)
+		if err != nil {
 			return nil, err
 		}
+		if !ok {
+			return nil, fmt.Errorf("%w: unknown role %q", ErrValidation, roleName)
+		}
+	}
+	u := &User{ID: NewID(), Email: email, Name: name, PasswordHash: hash, Status: StatusActive}
+	txErr := s.repo.CreateUserWithRole(ctx, u, roleName)
+	if txErr != nil {
+		if strings.Contains(txErr.Error(), "already registered") {
+			return nil, ErrEmailTaken
+		}
+		return nil, txErr
 	}
 	return u, nil
 }

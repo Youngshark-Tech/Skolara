@@ -31,7 +31,7 @@ func New(level, format string) *slog.Logger {
 	default:
 		lv = slog.LevelInfo
 	}
-	opts := &slog.HandlerOptions{Level: lv}
+	opts := &slog.HandlerOptions{Level: lv, ReplaceAttr: SafeLogValue}
 	var h slog.Handler
 	if strings.EqualFold(format, "text") {
 		h = slog.NewTextHandler(os.Stdout, opts)
@@ -77,12 +77,15 @@ var forbiddenKeys = map[string]struct{}{
 	"refresh_token": {}, "secret": {}, "authorization": {}, "pin": {},
 }
 
-// SafeLogValue scrub: drop forbidden keys from attribute groups.
-func SafeLogValue(groups []string, a slog.Attr) slog.Value {
-	if _, bad := forbiddenKeys[strings.ToLower(a.Key)]; bad && len(groups) == 0 {
-		return slog.StringValue("[REDACTED]")
+// SafeLogValue scrub: forbidden keys are redacted at ANY group depth
+// (ReplaceAttr visits every attribute; returning a bare string value replaces
+// the whole attribute). Wired into logger.New so the documented redaction is
+// actually active (issue #53).
+func SafeLogValue(groups []string, a slog.Attr) slog.Attr {
+	if _, bad := forbiddenKeys[strings.ToLower(a.Key)]; bad {
+		return slog.Attr{Key: a.Key, Value: slog.StringValue("[REDACTED]")}
 	}
-	return a.Value
+	return a
 }
 
 // L returns a logger that injects correlation fields from ctx automatically.
