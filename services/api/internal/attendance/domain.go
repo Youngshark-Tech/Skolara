@@ -108,5 +108,13 @@ type Repo interface {
 	UpsertRecords(ctx context.Context, schoolID, sessionID, recordedBy string, records []RecordInput) error
 	RecordsForSession(ctx context.Context, schoolID, sessionID string) ([]*AttendanceRecord, error)
 
-	CloseSession(ctx context.Context, schoolID, id string) error
+	// CloseSession applies the closed status; returns false when the session was
+	// not open (already closed) — idempotent close semantics (#49).
+	CloseSession(ctx context.Context, schoolID, id string) (bool, error)
+	// RecordedLearnerIDs lists learner ids that already hold a record in the
+	// session (replay path skips enrollment re-validation for them).
+	RecordedLearnerIDs(ctx context.Context, schoolID, sessionID string) (map[string]bool, error)
+	// EnrolledLearners filters the given learner ids to those with an open
+	// enrollment at the school (issue #49: no cross-tenant attendance).
+	EnrolledLearners(ctx context.Context, schoolID string, learnerIDs []string) (map[string]bool, error)
 }

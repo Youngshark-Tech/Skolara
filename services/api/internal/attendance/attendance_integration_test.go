@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,6 +89,18 @@ func seedLearner(t *testing.T, f *fixture, first, last string) string {
 	return id
 }
 
+// enrollLearner inserts an ACTIVE enrollment at the school via raw SQL
+// (issue #49: attendance records are enrollment-scoped).
+func enrollLearner(t *testing.T, f *fixture, learnerID, schoolID string) {
+	t.Helper()
+	_, err := f.pool.Exec(context.Background(),
+		`INSERT INTO enrollments (id, school_id, learner_id, status, started_at)
+		 VALUES (gen_random_uuid(), $1, $2, 'active', now())`, schoolID, learnerID)
+	if err != nil {
+		t.Fatalf("enroll learner: %v", err)
+	}
+}
+
 func eventCount(t *testing.T, f *fixture, eventType, schoolID string) int {
 	t.Helper()
 	var n int
@@ -107,6 +120,8 @@ func TestAttendanceRecordIdempotentReplay(t *testing.T) {
 	class := seedClass(t, f, school.ID, "Grade 3")
 	l1 := seedLearner(t, f, "Ada", "One")
 	l2 := seedLearner(t, f, "Ben", "Two")
+	enrollLearner(t, f, l1, school.ID)
+	enrollLearner(t, f, l2, school.ID)
 
 	sess, err := f.svc.OpenSession(ctx, school.ID, class, "2026-05-04", actor1)
 	if err != nil {
@@ -148,6 +163,7 @@ func TestAttendanceBulkUpsertCorrection(t *testing.T) {
 	actor1 := mustActor(t, f, "att-correction@skolara.test")
 	class := seedClass(t, f, school.ID, "Grade 5")
 	l1 := seedLearner(t, f, "Cara", "Three")
+	enrollLearner(t, f, l1, school.ID)
 
 	sess, _ := f.svc.OpenSession(ctx, school.ID, class, "2026-05-05", actor1)
 	if err := f.svc.SubmitRecords(ctx, school.ID, sess.ID, actor1,
@@ -165,6 +181,7 @@ func TestAttendanceBulkUpsertCorrection(t *testing.T) {
 	}
 	// Reusing a mutation id for a DIFFERENT learner is a client bug: rejected.
 	l2 := seedLearner(t, f, "Dan", "Four")
+	enrollLearner(t, f, l2, school.ID)
 	if err := f.svc.SubmitRecords(ctx, school.ID, sess.ID, actor1,
 		[]RecordInput{{LearnerID: l2, Status: StatusPresent, ClientMutationID: "mut-a"}}); err == nil {
 		t.Fatal("mutation id reuse across learners accepted")
@@ -178,6 +195,7 @@ func TestAttendanceClosedSessionAndValidation(t *testing.T) {
 	actor1 := mustActor(t, f, "att-validation@skolara.test")
 	class := seedClass(t, f, school.ID, "Grade 6")
 	l1 := seedLearner(t, f, "Eve", "Five")
+	enrollLearner(t, f, l1, school.ID)
 
 	if _, err := f.svc.OpenSession(ctx, school.ID, class, "04/05/2026", actor1); err == nil {
 		t.Fatal("malformed date accepted")
@@ -215,6 +233,7 @@ func TestAttendanceTenantIsolationAndEvents(t *testing.T) {
 	actor2 := mustActor(t, f, "att-iso-b@skolara.test")
 	classA := seedClass(t, f, sA.ID, "A Class")
 	lA := seedLearner(t, f, "Fay", "Six")
+	enrollLearner(t, f, lA, sA.ID)
 
 	sessA, _ := f.svc.OpenSession(ctx, sA.ID, classA, "2026-05-07", actor1)
 
@@ -272,6 +291,7 @@ func TestAttendanceHTTPFlow(t *testing.T) {
 	school := mustSchool(t, f, "ATT-H", "HTTP Attendance")
 	class := seedClass(t, f, school.ID, "Grade 7")
 	l1 := seedLearner(t, f, "Gil", "Seven")
+	enrollLearner(t, f, l1, school.ID)
 
 	mux := http.NewServeMux()
 	NewHandler(f.svc).Register(mux, f.jwt, f.auth)
@@ -355,5 +375,73 @@ func TestAttendanceHTTPFlow(t *testing.T) {
 	rr = do("GET", "/api/v1/attendance/sessions", nil, false)
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("no school context: %d", rr.Code)
+	}
+}
+
+// TestAttendanceEnrollmentScopeAndCloseIdempotency guards the #49 fixes:
+// (1) records require an open enrollment at the acting school (replays of
+// already-recorded learners still succeed); (2) closing an already-closed
+// session is idempotent (200 semantics, no duplicate SessionClosed event);
+// (3) mutation-id uniqueness is per school, not global.
+func TestAttendanceEnrollmentScopeAndCloseIdempotency(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	sA := mustSchool(t, f, "ATT-ES", "Enroll Scope School")
+	sB := mustSchool(t, f, "ATT-ESB", "Other School")
+	actor := mustActor(t, f, "att-scope@skolara.test")
+	class := seedClass(t, f, sA.ID, "Grade 8")
+	local := seedLearner(t, f, "Local", "Kid")
+	enrollLearner(t, f, local, sA.ID)
+	foreign := seedLearner(t, f, "Foreign", "Kid")
+	enrollLearner(t, f, foreign, sB.ID)
+
+	sess, err := f.svc.OpenSession(ctx, sA.ID, class, "2026-05-08", actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Foreign (enrolled only at school B) learner rejected.
+	if err := f.svc.SubmitRecords(ctx, sA.ID, sess.ID, actor,
+		[]RecordInput{{LearnerID: foreign, Status: StatusPresent, ClientMutationID: "scope-1"}}); err == nil || !strings.Contains(err.Error(), "no open enrollment") {
+		t.Fatalf("cross-school attendance accepted: %v", err)
+	}
+
+	// Local learner accepted; replay with the same mutation id still succeeds
+	// (idempotent) even though the check path is exercised again.
+	if err := f.svc.SubmitRecords(ctx, sA.ID, sess.ID, actor,
+		[]RecordInput{{LearnerID: local, Status: StatusPresent, ClientMutationID: "scope-2"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.SubmitRecords(ctx, sA.ID, sess.ID, actor,
+		[]RecordInput{{LearnerID: local, Status: StatusPresent, ClientMutationID: "scope-2"}}); err != nil {
+		t.Fatalf("replay rejected: %v", err)
+	}
+
+	// Close twice: second close is idempotent and does not re-emit the event.
+	if _, err := f.svc.CloseSession(ctx, sA.ID, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := f.svc.CloseSession(ctx, sA.ID, sess.ID)
+	if err != nil || closed.Status != SessionClosed {
+		t.Fatalf("double close: %v %s", err, closed.Status)
+	}
+	var events int
+	if err := f.pool.QueryRow(ctx,
+		`SELECT count(*) FROM event_outbox WHERE event_type='attendance.SessionClosed' AND school_id=$1 AND aggregate_id=$2`,
+		sA.ID, sess.ID).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 {
+		t.Fatalf("SessionClosed events = %d, want exactly 1", events)
+	}
+
+	// Same mutation id at another school is independent (per-school scope).
+	sessB, err := f.svc.OpenSession(ctx, sB.ID, seedClass(t, f, sB.ID, "B Class"), "2026-05-08", actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.SubmitRecords(ctx, sB.ID, sessB.ID, actor,
+		[]RecordInput{{LearnerID: foreign, Status: StatusPresent, ClientMutationID: "scope-2"}}); err != nil {
+		t.Fatalf("per-school mutation-id scope violated: %v", err)
 	}
 }

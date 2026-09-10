@@ -151,18 +151,63 @@ func (r *pgRepo) RecordsForSession(ctx context.Context, schoolID, sessionID stri
 	return out, rows.Err()
 }
 
-func (r *pgRepo) CloseSession(ctx context.Context, schoolID, id string) error {
+func (r *pgRepo) CloseSession(ctx context.Context, schoolID, id string) (bool, error) {
 	tag, err := r.pool.Exec(ctx,
 		`UPDATE attendance_sessions SET status = 'closed' WHERE id = $1 AND school_id = $2 AND status = 'open'`,
 		id, schoolID)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if tag.RowsAffected() == 0 {
-		// Either unknown in this school or already closed.
-		return ErrNotFound
+	return tag.RowsAffected() == 1, nil
+}
+
+// RecordedLearnerIDs lists learner ids already holding a record in the
+// session — idempotent replays skip enrollment re-validation for them (#49).
+func (r *pgRepo) RecordedLearnerIDs(ctx context.Context, schoolID, sessionID string) (map[string]bool, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT learner_id FROM attendance_records WHERE school_id = $1 AND session_id = $2`,
+		schoolID, sessionID)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// EnrolledLearners reports which of the given learners hold an OPEN
+// enrollment at the school (same non-terminal states as the students domain —
+// keeps cross-tenant attendance out, issue #49).
+func (r *pgRepo) EnrolledLearners(ctx context.Context, schoolID string, learnerIDs []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(learnerIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.pool.Query(ctx,
+		`SELECT learner_id FROM enrollments
+                 WHERE school_id = $1
+                   AND learner_id = ANY($2::uuid[])
+                   AND status IN ('applicant','admitted','active','suspended','transfer_pending')`,
+		schoolID, learnerIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
 }
 
 // --- helpers ----------------------------------------------------------------
