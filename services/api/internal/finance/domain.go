@@ -213,8 +213,12 @@ type Repo interface {
 	EntryByID(ctx context.Context, schoolID, id string) (*JournalEntry, error)
 
 	// Idempotency (platform table, scope='finance').
-	IdempotencyResult(ctx context.Context, key string) (*string, error)
-	StoreIdempotencyKey(ctx context.Context, tx postgres.Querier, key string, result []byte) error
+	IdempotencyResult(ctx context.Context, scope, key string) (*string, error)
+	// ClaimIdempotencyKey inserts-first (gating claim) inside the caller's
+	// transaction; on conflict it waits and returns the winner's stored
+	// response — single-tx idempotency (issue #45).
+	ClaimIdempotencyKey(ctx context.Context, tx postgres.Querier, scope, key, schoolID string) (bool, *string, error)
+	StoreIdempotencyKey(ctx context.Context, tx postgres.Querier, scope, key, schoolID string, result []byte) error
 
 	// Fee structures.
 	CreateFeeStructure(ctx context.Context, schoolID string, fs *FeeStructure) error

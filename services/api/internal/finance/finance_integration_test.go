@@ -733,3 +733,205 @@ func TestConfirmRollbackKeepsInvoiceConsistent(t *testing.T) {
 		t.Fatalf("payment status after rollback = %s, want pending", status)
 	}
 }
+
+// TestPostEntryIdempotentKeyConcurrentSingleEntry guards the issue #45
+// single-tx claim: N concurrent PostEntry calls with the SAME key must
+// produce exactly ONE posting and every caller must observe the SAME entry.
+// On main, concurrent same-key requests both passed the pre-read and both
+// posted (the loser's key store was silently swallowed).
+func TestPostEntryIdempotentKeyConcurrentSingleEntry(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	school := mustSchool(t, f, "FIN-IDEM", "Idem Race School")
+	bank := mustAccount(t, f, school.ID, "bank")
+	receivable := mustAccount(t, f, school.ID, "fees_receivable")
+
+	lines := []LineInput{
+		{AccountID: bank.ID, DebitMinor: 700},
+		{AccountID: receivable.ID, CreditMinor: 700},
+	}
+
+	type res struct {
+		entry *JournalEntry
+		err   error
+	}
+	const racers = 6
+	results := make(chan res, racers)
+	for i := 0; i < racers; i++ {
+		go func() {
+			e, err := f.svc.PostEntry(ctx, school.ID, "", "race post", "", "race-key-1", "", lines)
+			results <- res{e, err}
+		}()
+	}
+	ids := map[string]int{}
+	for i := 0; i < racers; i++ {
+		r := <-results
+		if r.err != nil {
+			t.Fatalf("concurrent PostEntry failed: %v", r.err)
+		}
+		ids[r.entry.ID]++
+	}
+	if len(ids) != 1 {
+		t.Fatalf("expected a single shared entry id, got %d distinct: %v", len(ids), ids)
+	}
+	if got := journalCount(t, f); got != 1 {
+		t.Fatalf("expected exactly 1 posting, got %d", got)
+	}
+}
+
+// TestEntryKeyCannotSwallowWebhook guards the scoped idempotency namespaces
+// (#45): a client posting a journal entry with a key shaped like an old
+// global webhook key must not affect webhook deliveries (and vice versa).
+func TestEntryKeyCannotSwallowWebhook(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	school := mustSchool(t, f, "FIN-NS", "Namespace School")
+	learner := seedLearner(t, f, "Name", "Space")
+
+	inv, err := f.svc.CreateInvoice(ctx, school.ID, "", CreateInvoiceInput{
+		LearnerID: learner,
+		DueDate:   time.Now().UTC().Add(72 * time.Hour).Format("2006-01-02"),
+		Lines:     []InvoiceLineInput{{Description: "Tuition", AmountMinor: 300_000}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.svc.CreatePayment(ctx, school.ID, CreatePaymentInput{
+		InvoiceID: inv.ID, PayerRef: "g-ns", AmountMinor: 300_000, Provider: "mpesa", ProviderRef: "NS-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-claim the raw string a legacy client might use.
+	bank := mustAccount(t, f, school.ID, "bank")
+	receivable := mustAccount(t, f, school.ID, "fees_receivable")
+	if _, err := f.svc.PostEntry(ctx, school.ID, "", "sneaky", "", "webhook:EV-NS-1", "", []LineInput{
+		{AccountID: bank.ID, DebitMinor: 1},
+		{AccountID: receivable.ID, CreditMinor: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The provider's delivery with the same eventId must still confirm.
+	out, err := f.svc.ConfirmWebhook(ctx, school.ID, ConfirmWebhookInput{
+		EventID: "EV-NS-1", PaymentID: p.ID, Status: "confirmed", ProviderRef: "NS-1",
+	})
+	if err != nil || out["status"] != "confirmed" {
+		t.Fatalf("webhook swallowed by entry idempotency key: %v %v", err, out)
+	}
+}
+
+// TestFailWebhookDoesNotPoisonLaterConfirm guards the FailWebhook fix (#45):
+// a failed delivery that did NOT apply (payment not in pending state) must
+// not persist its key — a later confirmed delivery of the same event id
+// proceeds normally.
+func TestFailWebhookDoesNotPoisonLaterConfirm(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	school := mustSchool(t, f, "FIN-POISON", "Poison School")
+	learner := seedLearner(t, f, "Poi", "Son")
+
+	inv, err := f.svc.CreateInvoice(ctx, school.ID, "", CreateInvoiceInput{
+		LearnerID: learner,
+		DueDate:   time.Now().UTC().Add(72 * time.Hour).Format("2006-01-02"),
+		Lines:     []InvoiceLineInput{{Description: "Tuition", AmountMinor: 200_000}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.svc.CreatePayment(ctx, school.ID, CreatePaymentInput{
+		InvoiceID: inv.ID, PayerRef: "g-p", AmountMinor: 200_000, Provider: "mpesa", ProviderRef: "PS-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Confirm via one event id.
+	if _, err := f.svc.ConfirmWebhook(ctx, school.ID, ConfirmWebhookInput{
+		EventID: "PS-EVT-A", PaymentID: p.ID, Status: "confirmed", ProviderRef: "PS-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A stale failed delivery (same payment now confirmed => applied=false).
+	out, err := f.svc.FailWebhook(ctx, school.ID, "PS-EVT-B", p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out["applied"] != false {
+		t.Fatalf("expected applied=false, got %v", out["applied"])
+	}
+
+	// Retry of the failed event as confirmed must NOT be poisoned.
+	out2, err := f.svc.ConfirmWebhook(ctx, school.ID, ConfirmWebhookInput{
+		EventID: "PS-EVT-B", PaymentID: p.ID, Status: "confirmed", ProviderRef: "PS-1",
+	})
+	if err != nil {
+		t.Fatalf("confirm after non-applying failed event: %v", err)
+	}
+	if out2["status"] != "confirmed" {
+		t.Fatalf("poisoned webhook result: %v", out2)
+	}
+
+	// No new postings: the payment was already confirmed once (CAS replay).
+	if got := journalCount(t, f); got != 1 {
+		t.Fatalf("expected exactly 1 payment posting, got %d", got)
+	}
+}
+
+// TestWebhookIdempotencyIsolatedAcrossSchools guards school-scoped webhook
+// keys (#45): the same eventId delivered for two different schools is two
+// independent events.
+func TestWebhookIdempotencyIsolatedAcrossSchools(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	sA := mustSchool(t, f, "FIN-WA", "Webhook School A")
+	sB := mustSchool(t, f, "FIN-WB", "Webhook School B")
+	lA := seedLearner(t, f, "W", "One")
+	lB := seedLearner(t, f, "W", "Two")
+
+	mk := func(school, learner, ref string) (*Invoice, *Payment) {
+		inv, err := f.svc.CreateInvoice(ctx, school, "", CreateInvoiceInput{
+			LearnerID: learner,
+			DueDate:   time.Now().UTC().Add(72 * time.Hour).Format("2006-01-02"),
+			Lines:     []InvoiceLineInput{{Description: "Tuition", AmountMinor: 100_000}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := f.svc.CreatePayment(ctx, school, CreatePaymentInput{
+			InvoiceID: inv.ID, PayerRef: "g", AmountMinor: 100_000, Provider: "mpesa", ProviderRef: ref,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return inv, p
+	}
+	invA, pA := mk(sA.ID, lA, "WA-1")
+	invB, pB := mk(sB.ID, lB, "WB-1")
+
+	// Same eventId at both schools: each school's delivery confirms its own
+	// payment; the second is NOT treated as a replay of the first.
+	if _, err := f.svc.ConfirmWebhook(ctx, sA.ID, ConfirmWebhookInput{
+		EventID: "SHARED-EVT", PaymentID: pA.ID, Status: "confirmed", ProviderRef: "WA-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	outB, err := f.svc.ConfirmWebhook(ctx, sB.ID, ConfirmWebhookInput{
+		EventID: "SHARED-EVT", PaymentID: pB.ID, Status: "confirmed", ProviderRef: "WB-1",
+	})
+	if err != nil {
+		t.Fatalf("same eventId at another school rejected: %v", err)
+	}
+	if _, replayed := outB["replayed"]; replayed {
+		t.Fatalf("cross-school webhook replay leak: %v", outB)
+	}
+
+	for _, inv := range []*Invoice{invA, invB} {
+		got, err := f.svc.Invoice(ctx, inv.SchoolID, inv.ID)
+		if err != nil || got.Status != InvoicePaid {
+			t.Fatalf("invoice %s not paid: %v %+v", inv.ID, err, got)
+		}
+	}
+}

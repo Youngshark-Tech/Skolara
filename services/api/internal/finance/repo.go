@@ -132,13 +132,17 @@ func (r *pgRepo) EntryByID(ctx context.Context, schoolID, id string) (*JournalEn
 
 // --- idempotency ------------------------------------------------------------
 
-const financeIdempotencyScope = "finance"
+// Idempotency keys are scoped per operation AND per tenant (issue #45):
+// journal postings and webhook deliveries never share a namespace, and two
+// schools cannot collide or read each other's stored responses. scope format:
+// "finance:entry:<schoolID>" and "finance:webhook:<schoolID>".
 
-func (r *pgRepo) IdempotencyResult(ctx context.Context, key string) (*string, error) {
+// idempotencyResult reads a stored response within (scope, key).
+func (r *pgRepo) idempotencyResult(ctx context.Context, q postgres.Querier, scope, key string) (*string, error) {
 	var result *string
-	err := r.pool.QueryRow(ctx,
+	err := q.QueryRow(ctx,
 		`SELECT response::text FROM idempotency_keys WHERE scope = $1 AND key = $2`,
-		financeIdempotencyScope, key).Scan(&result)
+		scope, key).Scan(&result)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -148,11 +152,42 @@ func (r *pgRepo) IdempotencyResult(ctx context.Context, key string) (*string, er
 	return result, nil
 }
 
-// StoreIdempotencyKey records the key on the platform registry (000001).
-func (r *pgRepo) StoreIdempotencyKey(ctx context.Context, tx postgres.Querier, key string, result []byte) error {
+func (r *pgRepo) IdempotencyResult(ctx context.Context, scope, key string) (*string, error) {
+	return r.idempotencyResult(ctx, r.pool, scope, key)
+}
+
+// ClaimIdempotencyKey atomically claims (scope, key): INSERT first; on
+// conflict it WAITS for the concurrent holder to finish and returns that
+// holder's stored response. The boolean return reports whether THIS caller
+// won the claim (reserved placeholder still in place) and must persist its
+// result via StoreIdempotencyKey in the SAME transaction (issue #45: the old
+// check-then-act split let concurrent same-key requests double-post and a
+// crash between entry commit and key store duplicate the posting).
+// Ownership is compared as JSONB equality inside SQL — JSONB normalizes
+// whitespace, so string comparison of the placeholder is unsafe.
+const claimReservedResponse = `{"skolara:claimed":true}`
+
+func (r *pgRepo) ClaimIdempotencyKey(ctx context.Context, tx postgres.Querier, scope, key, schoolID string) (bool, *string, error) {
+	var owned bool
+	var resp *string
+	err := tx.QueryRow(ctx,
+		`INSERT INTO idempotency_keys (scope, key, school_id, response) VALUES ($1,$2,$3,$4::jsonb)
+		 ON CONFLICT (scope, key) DO UPDATE SET response = idempotency_keys.response
+		 RETURNING response IS NOT DISTINCT FROM $4::jsonb, response::text`,
+		scope, key, schoolID, claimReservedResponse).Scan(&owned, &resp)
+	if err != nil {
+		return false, nil, err
+	}
+	return owned, resp, nil
+}
+
+// StoreIdempotencyKey records the result for a key claimed earlier in this
+// transaction (platform registry table 000001, school-scoped).
+func (r *pgRepo) StoreIdempotencyKey(ctx context.Context, tx postgres.Querier, scope, key, schoolID string, result []byte) error {
 	_, err := tx.Exec(ctx,
-		`INSERT INTO idempotency_keys (scope, key, response) VALUES ($1,$2,$3)
-		 ON CONFLICT (scope, key) DO NOTHING`, financeIdempotencyScope, key, result)
+		`INSERT INTO idempotency_keys (scope, key, school_id, response) VALUES ($1,$2,$3,$4)
+		 ON CONFLICT (scope, key) DO UPDATE SET response = EXCLUDED.response, school_id = EXCLUDED.school_id`,
+		scope, key, schoolID, result)
 	return err
 }
 
