@@ -65,7 +65,7 @@ NEW_TOKEN=$(echo "$REFRESH" | jsonget "['accessToken']" 2>/dev/null || true)
 AUTH="Authorization: Bearer $NEW_TOKEN"
 
 # --- tenancy ----------------------------------------------------------------
-SUFFIX="${RANDOM}${$$}"   # collision-safe per run (RANDOM + PID)
+SUFFIX="$RANDOM$$"   # collision-safe per run (RANDOM + PID)
 SCHOOL=$(curl -s -H "$AUTH" -H 'Content-Type: application/json' \
   -d "{\"code\":\"SMK-$SUFFIX\",\"name\":\"Smoke School $SUFFIX\"}" "$BASE/api/v1/schools")
 SCHOOL_ID=$(echo "$SCHOOL" | jsonget "['id']")
