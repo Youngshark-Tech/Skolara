@@ -1,6 +1,7 @@
 # ADR-008: Web — Next.js App Router, Tailwind, shadcn-style UI, TanStack Query
 
 **Status:** Accepted · **Date:** 2026-09-09
+**Status (2026-10):** Superseded in part by ADR-011 — memory-only access token + silent refresh + middleware guard (the implementation initially deviated; ADR-011 restores this ADR's auth intent).
 
 ## Context
 
