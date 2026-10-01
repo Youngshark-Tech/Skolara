@@ -31,9 +31,15 @@ func scanYear(row pgx.Row) (*AcademicYear, error) {
 }
 
 func (r *pgRepo) CreateAcademicYear(ctx context.Context, schoolID string, y *AcademicYear) error {
-	return r.pool.QueryRow(ctx,
+	return r.CreateAcademicYearTx(ctx, r.pool, schoolID, y)
+}
+
+// CreateAcademicYearTx is CreateAcademicYear on a caller-owned transaction so
+// the insert and its outbox event commit atomically (issue #52).
+func (r *pgRepo) CreateAcademicYearTx(ctx context.Context, q postgres.Querier, schoolID string, y *AcademicYear) error {
+	return q.QueryRow(ctx,
 		`INSERT INTO academic_years (id, school_id, name, start_date, end_date)
-		 VALUES ($1,$2,$3,$4::date,$5::date) RETURNING `+yearCols,
+                 VALUES ($1,$2,$3,$4::date,$5::date) RETURNING `+yearCols,
 		y.ID, schoolID, y.Name, y.StartDate, y.EndDate).
 		Scan(&y.ID, &y.SchoolID, &y.Name, &y.StartDate, &y.EndDate, &y.Status, &y.CreatedAt)
 }
@@ -77,7 +83,7 @@ func scanTerm(row pgx.Row) (*Term, error) {
 func (r *pgRepo) CreateTerm(ctx context.Context, schoolID string, t *Term) error {
 	return r.pool.QueryRow(ctx,
 		`INSERT INTO terms (id, school_id, academic_year_id, name, start_date, end_date)
-		 VALUES ($1,$2,$3,$4,$5::date,$6::date) RETURNING `+termCols,
+                 VALUES ($1,$2,$3,$4,$5::date,$6::date) RETURNING `+termCols,
 		t.ID, schoolID, t.AcademicYearID, t.Name, t.StartDate, t.EndDate).
 		Scan(&t.ID, &t.SchoolID, &t.AcademicYearID, &t.Name, &t.StartDate, &t.EndDate, &t.CreatedAt)
 }
@@ -120,7 +126,7 @@ func (r *pgRepo) TermsForYearTx(ctx context.Context, q postgres.Querier, schoolI
 func (r *pgRepo) CreateTermTx(ctx context.Context, q postgres.Querier, schoolID string, t *Term) error {
 	return q.QueryRow(ctx,
 		`INSERT INTO terms (id, school_id, academic_year_id, name, start_date, end_date)
-		 VALUES ($1,$2,$3,$4,$5::date,$6::date) RETURNING `+termCols,
+                 VALUES ($1,$2,$3,$4,$5::date,$6::date) RETURNING `+termCols,
 		t.ID, schoolID, t.AcademicYearID, t.Name, t.StartDate, t.EndDate).
 		Scan(&t.ID, &t.SchoolID, &t.AcademicYearID, &t.Name, &t.StartDate, &t.EndDate, &t.CreatedAt)
 }
@@ -204,7 +210,12 @@ func scanClass(row pgx.Row) (*ClassGroup, error) {
 }
 
 func (r *pgRepo) CreateClassGroup(ctx context.Context, schoolID string, c *ClassGroup) error {
-	return r.pool.QueryRow(ctx,
+	return r.CreateClassGroupTx(ctx, r.pool, schoolID, c)
+}
+
+// CreateClassGroupTx is CreateClassGroup on a caller-owned transaction (issue #52).
+func (r *pgRepo) CreateClassGroupTx(ctx context.Context, q postgres.Querier, schoolID string, c *ClassGroup) error {
+	return q.QueryRow(ctx,
 		`INSERT INTO class_groups (id, school_id, academic_year_id, name) VALUES ($1,$2,$3,$4) RETURNING `+classCols,
 		c.ID, schoolID, c.AcademicYearID, c.Name).
 		Scan(&c.ID, &c.SchoolID, &c.AcademicYearID, &c.Name)
@@ -218,8 +229,8 @@ func (r *pgRepo) ClassGroupByID(ctx context.Context, schoolID, id string) (*Clas
 func (r *pgRepo) ListClassGroups(ctx context.Context, schoolID, yearID string) ([]*ClassGroup, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT `+classCols+` FROM class_groups
-		 WHERE school_id = $1 AND ($2::uuid IS NULL OR academic_year_id = $2)
-		 ORDER BY name`, schoolID, nullableUUID(yearID))
+                 WHERE school_id = $1 AND ($2::uuid IS NULL OR academic_year_id = $2)
+                 ORDER BY name`, schoolID, nullableUUID(yearID))
 	if err != nil {
 		return nil, err
 	}
@@ -265,12 +276,12 @@ func (r *pgRepo) AddRosterEntries(ctx context.Context, schoolID, classGroupID st
 			}
 			tag, err := tx.Exec(ctx,
 				`INSERT INTO roster_entries (class_group_id, learner_id)
-				 SELECT $1, $2
-				 WHERE EXISTS (SELECT 1 FROM class_groups WHERE id = $1 AND school_id = $3)
-				   AND EXISTS (SELECT 1 FROM enrollments e
-				               WHERE e.learner_id = $2 AND e.school_id = $3
-				                 AND e.status IN ('applicant','admitted','active','suspended','transfer_pending'))
-				 ON CONFLICT (class_group_id, learner_id) DO NOTHING`,
+                                 SELECT $1, $2
+                                 WHERE EXISTS (SELECT 1 FROM class_groups WHERE id = $1 AND school_id = $3)
+                                   AND EXISTS (SELECT 1 FROM enrollments e
+                                               WHERE e.learner_id = $2 AND e.school_id = $3
+                                                 AND e.status IN ('applicant','admitted','active','suspended','transfer_pending'))
+                                 ON CONFLICT (class_group_id, learner_id) DO NOTHING`,
 				classGroupID, lid, schoolID)
 			if err != nil {
 				return fmt.Errorf("insert roster entry: %w", err)
@@ -290,11 +301,11 @@ func (r *pgRepo) AddRosterEntries(ctx context.Context, schoolID, classGroupID st
 func (r *pgRepo) RosterForClass(ctx context.Context, schoolID, classGroupID string) ([]*RosterEntryView, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT l.id, l.first_name, l.last_name, l.external_id
-		 FROM roster_entries re
-		 JOIN class_groups c ON c.id = re.class_group_id
-		 JOIN learners l ON l.id = re.learner_id
-		 WHERE re.class_group_id = $1 AND c.school_id = $2
-		 ORDER BY l.last_name, l.first_name`, classGroupID, schoolID)
+                 FROM roster_entries re
+                 JOIN class_groups c ON c.id = re.class_group_id
+                 JOIN learners l ON l.id = re.learner_id
+                 WHERE re.class_group_id = $1 AND c.school_id = $2
+                 ORDER BY l.last_name, l.first_name`, classGroupID, schoolID)
 	if err != nil {
 		return nil, err
 	}
@@ -313,22 +324,28 @@ func (r *pgRepo) RosterForClass(ctx context.Context, schoolID, classGroupID stri
 // --- teaching assignments ---------------------------------------------------
 
 func (r *pgRepo) CreateTeachingAssignment(ctx context.Context, schoolID string, a *TeachingAssignment) error {
-	return r.pool.QueryRow(ctx,
+	return r.CreateTeachingAssignmentTx(ctx, r.pool, schoolID, a)
+}
+
+// CreateTeachingAssignmentTx is CreateTeachingAssignment on a caller-owned
+// transaction (issue #52).
+func (r *pgRepo) CreateTeachingAssignmentTx(ctx context.Context, q postgres.Querier, schoolID string, a *TeachingAssignment) error {
+	return q.QueryRow(ctx,
 		`INSERT INTO teaching_assignments (id, school_id, class_group_id, subject_id, teacher_id)
-		 VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+                 VALUES ($1,$2,$3,$4,$5) RETURNING id`,
 		a.ID, schoolID, a.ClassGroupID, a.SubjectID, a.TeacherID).Scan(&a.ID)
 }
 
 func (r *pgRepo) AssignmentsForClass(ctx context.Context, schoolID, classGroupID string) ([]*TeachingAssignmentView, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT ta.id, ta.school_id, ta.class_group_id, ta.subject_id, ta.teacher_id,
-		        u.id, u.name, u.email,
-		        s.id, s.code, s.name
-		 FROM teaching_assignments ta
-		 JOIN users u ON u.id = ta.teacher_id
-		 JOIN subjects s ON s.id = ta.subject_id
-		 WHERE ta.class_group_id = $1 AND ta.school_id = $2
-		 ORDER BY s.name`, classGroupID, schoolID)
+                        u.id, u.name, u.email,
+                        s.id, s.code, s.name
+                 FROM teaching_assignments ta
+                 JOIN users u ON u.id = ta.teacher_id
+                 JOIN subjects s ON s.id = ta.subject_id
+                 WHERE ta.class_group_id = $1 AND ta.school_id = $2
+                 ORDER BY s.name`, classGroupID, schoolID)
 	if err != nil {
 		return nil, err
 	}

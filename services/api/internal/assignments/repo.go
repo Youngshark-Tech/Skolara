@@ -26,7 +26,7 @@ func (r *pgRepo) RosteredLearner(ctx context.Context, classGroupID, learnerID st
 }
 
 const assignmentCols = `id, school_id, class_group_id, subject_id, teacher_id, title, instructions,
-		due_date::text, status, published_at, closed_at, created_at`
+                due_date::text, status, published_at, closed_at, created_at`
 
 func scanAssignment(row pgx.Row) (*Assignment, error) {
 	var a Assignment
@@ -41,7 +41,7 @@ func scanAssignment(row pgx.Row) (*Assignment, error) {
 func (r *pgRepo) CreateAssignment(ctx context.Context, a *Assignment) error {
 	return r.pool.QueryRow(ctx,
 		`INSERT INTO assignments (id, school_id, class_group_id, subject_id, teacher_id, title, instructions, due_date)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8::date) RETURNING `+assignmentCols,
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8::date) RETURNING `+assignmentCols,
 		a.ID, a.SchoolID, a.ClassGroupID, a.SubjectID, a.TeacherID, a.Title, a.Instructions, a.DueDate).
 		Scan(&a.ID, &a.SchoolID, &a.ClassGroupID, &a.SubjectID, &a.TeacherID,
 			&a.Title, &a.Instructions, &a.DueDate, &a.Status, &a.PublishedAt, &a.ClosedAt, &a.CreatedAt)
@@ -60,15 +60,15 @@ func (r *pgRepo) ListAssignments(ctx context.Context, schoolID, classGroupID str
 	var total int
 	if err := r.pool.QueryRow(ctx,
 		`SELECT count(*) FROM assignments
-		 WHERE school_id = $1 AND ($2::uuid IS NULL OR class_group_id = $2) AND ($3::text IS NULL OR status = $3::text)`,
+                 WHERE school_id = $1 AND ($2::uuid IS NULL OR class_group_id = $2) AND ($3::text IS NULL OR status = $3::text)`,
 		schoolID, nullableUUID(classGroupID), st).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	rows, err := r.pool.Query(ctx,
 		`SELECT `+assignmentCols+` FROM assignments
-		 WHERE school_id = $1 AND ($2::uuid IS NULL OR class_group_id = $2) AND ($3::text IS NULL OR status = $3::text)
-		 ORDER BY created_at DESC
-		 LIMIT $4 OFFSET $5`,
+                 WHERE school_id = $1 AND ($2::uuid IS NULL OR class_group_id = $2) AND ($3::text IS NULL OR status = $3::text)
+                 ORDER BY created_at DESC
+                 LIMIT $4 OFFSET $5`,
 		schoolID, nullableUUID(classGroupID), st, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -86,13 +86,19 @@ func (r *pgRepo) ListAssignments(ctx context.Context, schoolID, classGroupID str
 }
 
 func (r *pgRepo) UpdateAssignmentStatus(ctx context.Context, schoolID, id string, from, to AssignmentStatus) error {
+	return r.UpdateAssignmentStatusTx(ctx, r.pool, schoolID, id, from, to)
+}
+
+// UpdateAssignmentStatusTx is UpdateAssignmentStatus on a caller-owned
+// transaction so the transition and its outbox event commit atomically (issue #52).
+func (r *pgRepo) UpdateAssignmentStatusTx(ctx context.Context, q postgres.Querier, schoolID, id string, from, to AssignmentStatus) error {
 	var ts any
 	if to == AssignmentClosed {
 		ts = time.Now().UTC()
 	}
-	tag, err := r.pool.Exec(ctx,
+	tag, err := q.Exec(ctx,
 		`UPDATE assignments SET status = $3, closed_at = $4
-		 WHERE id = $1 AND school_id = $2 AND status = $5`,
+                 WHERE id = $1 AND school_id = $2 AND status = $5`,
 		id, schoolID, string(to), ts, string(from))
 	if err != nil {
 		return err
@@ -104,7 +110,7 @@ func (r *pgRepo) UpdateAssignmentStatus(ctx context.Context, schoolID, id string
 }
 
 const submissionCols = `id, school_id, assignment_id, learner_id, content, status, grade, feedback,
-		submitted_at, graded_at, returned_at`
+                submitted_at, graded_at, returned_at`
 
 func scanSubmission(row pgx.Row) (*Submission, error) {
 	var s Submission
@@ -123,12 +129,12 @@ func scanSubmission(row pgx.Row) (*Submission, error) {
 func (r *pgRepo) UpsertSubmission(ctx context.Context, sub *Submission) error {
 	return r.pool.QueryRow(ctx,
 		`INSERT INTO assignment_submissions (id, school_id, assignment_id, learner_id, content)
-		 VALUES ($1,$2,$3,$4,$5)
-		 ON CONFLICT (assignment_id, learner_id) DO UPDATE SET
-			content = EXCLUDED.content,
-			submitted_at = now()
-		 WHERE assignment_submissions.status = 'submitted'
-		 RETURNING `+submissionCols,
+                 VALUES ($1,$2,$3,$4,$5)
+                 ON CONFLICT (assignment_id, learner_id) DO UPDATE SET
+                        content = EXCLUDED.content,
+                        submitted_at = now()
+                 WHERE assignment_submissions.status = 'submitted'
+                 RETURNING `+submissionCols,
 		uuid.NewString(), sub.SchoolID, sub.AssignmentID, sub.LearnerID, sub.Content).
 		Scan(&sub.ID, &sub.SchoolID, &sub.AssignmentID, &sub.LearnerID, &sub.Content, &sub.Status,
 			&sub.Grade, &sub.Feedback, &sub.SubmittedAt, &sub.GradedAt, &sub.ReturnedAt)
@@ -157,15 +163,15 @@ func (r *pgRepo) SubjectInSchool(ctx context.Context, schoolID, subjectID string
 func (r *pgRepo) Submission(ctx context.Context, schoolID, assignmentID, learnerID string) (*Submission, error) {
 	return scanSubmission(r.pool.QueryRow(ctx,
 		`SELECT `+submissionCols+` FROM assignment_submissions
-		 WHERE school_id = $1 AND assignment_id = $2 AND learner_id = $3`,
+                 WHERE school_id = $1 AND assignment_id = $2 AND learner_id = $3`,
 		schoolID, assignmentID, learnerID))
 }
 
 func (r *pgRepo) SubmissionsForAssignment(ctx context.Context, schoolID, assignmentID string) ([]*Submission, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT `+submissionCols+` FROM assignment_submissions
-		 WHERE school_id = $1 AND assignment_id = $2
-		 ORDER BY submitted_at`, schoolID, assignmentID)
+                 WHERE school_id = $1 AND assignment_id = $2
+                 ORDER BY submitted_at`, schoolID, assignmentID)
 	if err != nil {
 		return nil, err
 	}
@@ -182,11 +188,17 @@ func (r *pgRepo) SubmissionsForAssignment(ctx context.Context, schoolID, assignm
 }
 
 func (r *pgRepo) GradeSubmission(ctx context.Context, schoolID, assignmentID, learnerID, grade, feedback string) (*Submission, error) {
-	row := r.pool.QueryRow(ctx,
+	return r.GradeSubmissionTx(ctx, r.pool, schoolID, assignmentID, learnerID, grade, feedback)
+}
+
+// GradeSubmissionTx is GradeSubmission on a caller-owned transaction so the
+// grade write and its outbox event commit atomically (issue #52).
+func (r *pgRepo) GradeSubmissionTx(ctx context.Context, q postgres.Querier, schoolID, assignmentID, learnerID, grade, feedback string) (*Submission, error) {
+	row := q.QueryRow(ctx,
 		`UPDATE assignment_submissions
-		 SET status = 'graded', grade = $4, feedback = $5, graded_at = now()
-		 WHERE school_id = $1 AND assignment_id = $2 AND learner_id = $3 AND status = 'submitted'
-		 RETURNING `+submissionCols,
+                 SET status = 'graded', grade = $4, feedback = $5, graded_at = now()
+                 WHERE school_id = $1 AND assignment_id = $2 AND learner_id = $3 AND status = 'submitted'
+                 RETURNING `+submissionCols,
 		schoolID, assignmentID, learnerID, grade, feedback)
 	return scanSubmission(row)
 }
@@ -194,9 +206,9 @@ func (r *pgRepo) GradeSubmission(ctx context.Context, schoolID, assignmentID, le
 func (r *pgRepo) ReturnSubmission(ctx context.Context, schoolID, assignmentID, learnerID string) (*Submission, error) {
 	row := r.pool.QueryRow(ctx,
 		`UPDATE assignment_submissions
-		 SET status = 'returned', returned_at = now()
-		 WHERE school_id = $1 AND assignment_id = $2 AND learner_id = $3 AND status = 'graded'
-		 RETURNING `+submissionCols,
+                 SET status = 'returned', returned_at = now()
+                 WHERE school_id = $1 AND assignment_id = $2 AND learner_id = $3 AND status = 'graded'
+                 RETURNING `+submissionCols,
 		schoolID, assignmentID, learnerID)
 	return scanSubmission(row)
 }

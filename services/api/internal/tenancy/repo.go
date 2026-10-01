@@ -18,7 +18,13 @@ func NewRepo(pool *postgres.Pool) Repo { return &pgRepo{pool: pool} }
 var ErrNotFound = errors.New("tenancy: not found")
 
 func (r *pgRepo) CreateGroup(ctx context.Context, g *EducationGroup) error {
-	return r.pool.QueryRow(ctx,
+	return r.CreateGroupTx(ctx, r.pool, g)
+}
+
+// CreateGroupTx is CreateGroup on a caller-owned transaction so the insert
+// and its outbox event commit atomically (issue #52).
+func (r *pgRepo) CreateGroupTx(ctx context.Context, q postgres.Querier, g *EducationGroup) error {
+	return q.QueryRow(ctx,
 		`INSERT INTO education_groups (id, name) VALUES ($1,$2) RETURNING id, name`,
 		g.ID, g.Name).Scan(&g.ID, &g.Name)
 }
@@ -52,7 +58,12 @@ func scanSchool(row pgx.Row) (*School, error) {
 }
 
 func (r *pgRepo) CreateSchool(ctx context.Context, s *School) error {
-	return r.pool.QueryRow(ctx,
+	return r.CreateSchoolTx(ctx, r.pool, s)
+}
+
+// CreateSchoolTx is CreateSchool on a caller-owned transaction (issue #52).
+func (r *pgRepo) CreateSchoolTx(ctx context.Context, q postgres.Querier, s *School) error {
+	return q.QueryRow(ctx,
 		`INSERT INTO schools (id, code, name, group_id) VALUES ($1,$2,$3,$4) RETURNING `+schoolCols,
 		s.ID, s.Code, s.Name, s.GroupID).Scan(&s.ID, &s.Code, &s.Name, &s.GroupID, &s.Status, &s.CreatedAt, &s.UpdatedAt)
 }
@@ -134,7 +145,12 @@ func (r *pgRepo) RoleExists(ctx context.Context, name string) (bool, error) {
 }
 
 func (r *pgRepo) AddMember(ctx context.Context, m *Membership) error {
-	_, err := r.pool.Exec(ctx,
+	return r.AddMemberTx(ctx, r.pool, m)
+}
+
+// AddMemberTx is AddMember on a caller-owned transaction (issue #52).
+func (r *pgRepo) AddMemberTx(ctx context.Context, q postgres.Querier, m *Membership) error {
+	_, err := q.Exec(ctx,
 		`INSERT INTO school_memberships (user_id, school_id, role)
                  VALUES ($1,$2,(SELECT id FROM roles WHERE name=$3))
                  ON CONFLICT (user_id, school_id, role) DO NOTHING`,

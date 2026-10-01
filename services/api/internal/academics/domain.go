@@ -135,6 +135,8 @@ var (
 type Repo interface {
 	// Academic years.
 	CreateAcademicYear(ctx context.Context, schoolID string, y *AcademicYear) error
+	// CreateAcademicYearTx is CreateAcademicYear on a caller-owned transaction (issue #52).
+	CreateAcademicYearTx(ctx context.Context, q postgres.Querier, schoolID string, y *AcademicYear) error
 	AcademicYearByID(ctx context.Context, schoolID, id string) (*AcademicYear, error)
 	ListAcademicYears(ctx context.Context, schoolID string) ([]*AcademicYear, error)
 
@@ -152,6 +154,8 @@ type Repo interface {
 
 	// Class groups.
 	CreateClassGroup(ctx context.Context, schoolID string, c *ClassGroup) error
+	// CreateClassGroupTx is CreateClassGroup on a caller-owned transaction (issue #52).
+	CreateClassGroupTx(ctx context.Context, q postgres.Querier, schoolID string, c *ClassGroup) error
 	ClassGroupByID(ctx context.Context, schoolID, id string) (*ClassGroup, error)
 	ListClassGroups(ctx context.Context, schoolID, yearID string) ([]*ClassGroup, error)
 
@@ -164,5 +168,7 @@ type Repo interface {
 
 	// Teaching assignments.
 	CreateTeachingAssignment(ctx context.Context, schoolID string, a *TeachingAssignment) error
+	// CreateTeachingAssignmentTx is CreateTeachingAssignment on a caller-owned transaction (issue #52).
+	CreateTeachingAssignmentTx(ctx context.Context, q postgres.Querier, schoolID string, a *TeachingAssignment) error
 	AssignmentsForClass(ctx context.Context, schoolID, classGroupID string) ([]*TeachingAssignmentView, error)
 }

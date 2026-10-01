@@ -10,6 +10,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/postgres"
 )
 
 // SessionStatus is the lifecycle of an attendance session.
@@ -106,11 +108,16 @@ type Repo interface {
 	// fresh inserts; corrections (same learner, new mutation id) update;
 	// replays (same mutation id) are no-ops.
 	UpsertRecords(ctx context.Context, schoolID, sessionID, recordedBy string, records []RecordInput) error
+	// UpsertRecordsTx is UpsertRecords on a caller-owned transaction so the
+	// batch and its absence events commit atomically (issue #52).
+	UpsertRecordsTx(ctx context.Context, q postgres.Querier, schoolID, sessionID, recordedBy string, records []RecordInput) error
 	RecordsForSession(ctx context.Context, schoolID, sessionID string) ([]*AttendanceRecord, error)
 
 	// CloseSession applies the closed status; returns false when the session was
 	// not open (already closed) — idempotent close semantics (#49).
 	CloseSession(ctx context.Context, schoolID, id string) (bool, error)
+	// CloseSessionTx is CloseSession on a caller-owned transaction (issue #52).
+	CloseSessionTx(ctx context.Context, q postgres.Querier, schoolID, id string) (bool, error)
 	// RecordedLearnerIDs lists learner ids that already hold a record in the
 	// session (replay path skips enrollment re-validation for them).
 	RecordedLearnerIDs(ctx context.Context, schoolID, sessionID string) (map[string]bool, error)

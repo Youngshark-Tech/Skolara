@@ -26,3 +26,11 @@ Envelope is versioned (`schema_version` per event type); adding fields is additi
 
 - Broker-in-the-request-path: rejected — a broker outage must never make business writes fail.
 - Change-data-capture (Debezium): considered for later scale; outbox is simpler and sufficient now.
+
+## Implementation Note (2026-10, issue #52)
+
+Audit round 2 found the guarantee above was not actually honored at call sites. Hardened as follows:
+
+- **Recording:** every domain mutation in tenancy, students, academics, attendance, assignments and finance records its event on the same `pool.WithinTx` transaction as the write (repo `*Tx` variants take a `postgres.Querier`). Per-domain rollback regression tests force an event failure and assert the mutation rolls back with it. One documented best-effort exception: `identity.UserCreated` is recorded post-commit at the handler with an audit-trail fallback (identity is not in the six-domain scope of #52; user creation remains the source of truth via `users`).
+- **Dispatcher:** claims unpublished rows `FOR UPDATE SKIP LOCKED` inside one transaction and marks them published in that same transaction — concurrent dispatchers claim disjoint batches and a crash before commit re-delivers (at-least-once). Delivery failures are structured-logged with `event_id`, bump `attempts`, and persist `last_error` on the row; at the attempts cap (20) the row dead-letters (stays unpublished, excluded from claims) and raises `skolara_events_deadlettered_total`. No errors are swallowed.
+- **Delivery failure of a whole batch** (claim/scan/commit): logged and retried on the next tick; nothing is marked published on a failed commit.

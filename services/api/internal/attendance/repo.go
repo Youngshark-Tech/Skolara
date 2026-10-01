@@ -101,9 +101,17 @@ func (r *pgRepo) ListSessions(ctx context.Context, schoolID, classGroupID, date 
 // detection keys on.
 func (r *pgRepo) UpsertRecords(ctx context.Context, schoolID, sessionID, recordedBy string, records []RecordInput) error {
 	return r.pool.WithinTx(ctx, func(tx postgres.Querier) error {
-		for _, in := range records {
-			tag, err := tx.Exec(ctx,
-				`INSERT INTO attendance_records
+		return r.UpsertRecordsTx(ctx, tx, schoolID, sessionID, recordedBy, records)
+	})
+}
+
+// UpsertRecordsTx is the record batch on a caller-owned transaction so the
+// upserts and their absence events commit atomically (issue #52). Replay and
+// mutation-id semantics are documented on the Repo port.
+func (r *pgRepo) UpsertRecordsTx(ctx context.Context, q postgres.Querier, schoolID, sessionID, recordedBy string, records []RecordInput) error {
+	for _, in := range records {
+		tag, err := q.Exec(ctx,
+			`INSERT INTO attendance_records
                                         (id, school_id, session_id, learner_id, status, reason, recorded_by, client_mutation_id)
                                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
                                  ON CONFLICT (session_id, learner_id) DO UPDATE SET
@@ -112,21 +120,20 @@ func (r *pgRepo) UpsertRecords(ctx context.Context, schoolID, sessionID, recorde
                                         recorded_by = EXCLUDED.recorded_by,
                                         recorded_at = now()
                                  WHERE attendance_records.client_mutation_id IS DISTINCT FROM EXCLUDED.client_mutation_id`,
-				uuid.NewString(), schoolID, sessionID, in.LearnerID, string(in.Status), in.Reason, recordedBy, in.ClientMutationID)
-			if err != nil {
-				if isUniqueViolation(err) {
-					// client_mutation_id already used by a different row.
-					return ErrMutationUsed
-				}
-				return err
+			uuid.NewString(), schoolID, sessionID, in.LearnerID, string(in.Status), in.Reason, recordedBy, in.ClientMutationID)
+		if err != nil {
+			if isUniqueViolation(err) {
+				// client_mutation_id already used by a different row.
+				return ErrMutationUsed
 			}
-			if tag.RowsAffected() == 0 {
-				// No-op: replay of an already-applied mutation for this row.
-				continue
-			}
+			return err
 		}
-		return nil
-	})
+		if tag.RowsAffected() == 0 {
+			// No-op: replay of an already-applied mutation for this row.
+			continue
+		}
+	}
+	return nil
 }
 
 func (r *pgRepo) RecordsForSession(ctx context.Context, schoolID, sessionID string) ([]*AttendanceRecord, error) {
@@ -152,7 +159,13 @@ func (r *pgRepo) RecordsForSession(ctx context.Context, schoolID, sessionID stri
 }
 
 func (r *pgRepo) CloseSession(ctx context.Context, schoolID, id string) (bool, error) {
-	tag, err := r.pool.Exec(ctx,
+	return r.CloseSessionTx(ctx, r.pool, schoolID, id)
+}
+
+// CloseSessionTx is CloseSession on a caller-owned transaction so the status
+// flip and its outbox event commit atomically (issue #52).
+func (r *pgRepo) CloseSessionTx(ctx context.Context, q postgres.Querier, schoolID, id string) (bool, error) {
+	tag, err := q.Exec(ctx,
 		`UPDATE attendance_sessions SET status = 'closed' WHERE id = $1 AND school_id = $2 AND status = 'open'`,
 		id, schoolID)
 	if err != nil {

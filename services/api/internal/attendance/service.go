@@ -140,21 +140,31 @@ func (s *Service) SubmitRecords(ctx context.Context, schoolID, sessionID, actorI
 		}
 	}
 
-	if err := s.repo.UpsertRecords(ctx, schoolID, sessionID, actorID, records); err != nil {
-		return err
-	}
-	// Absence notifications: one event per absent outcome (at-least-once).
-	for _, in := range records {
-		if in.Status != StatusAbsent {
-			continue
+	// Records + absence events commit in ONE transaction (ADR-003, issue
+	// #52): a rollback of either removes both.
+	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		if err := s.repo.UpsertRecordsTx(ctx, tx, schoolID, sessionID, actorID, records); err != nil {
+			return err
 		}
-		s.emit(ctx, schoolID, sessionID, "attendance.AbsenceRecorded", map[string]any{
-			"learner_id":     in.LearnerID,
-			"class_group_id": sess.ClassGroupID,
-			"date":           sess.Date,
-			"status":         string(in.Status),
-			"reason":         in.Reason,
-		})
+		// Absence notifications: one event per absent outcome
+		// (at-least-once), riding the same tx as the records.
+		for _, in := range records {
+			if in.Status != StatusAbsent {
+				continue
+			}
+			if _, err := events.Record(ctx, tx, &schoolID, sessionID, "attendance.AbsenceRecorded", 1, map[string]any{
+				"learner_id":     in.LearnerID,
+				"class_group_id": sess.ClassGroupID,
+				"date":           sess.Date,
+				"status":         string(in.Status),
+				"reason":         in.Reason,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	return nil
 }
@@ -171,7 +181,8 @@ func (s *Service) Records(ctx context.Context, schoolID, sessionID string) ([]*A
 }
 
 // CloseSession closes a session (finalizes the roll call) and emits
-// attendance.SessionClosed.v1.
+// attendance.SessionClosed.v1 from the same transaction as the status
+// flip (issue #52).
 func (s *Service) CloseSession(ctx context.Context, schoolID, sessionID string) (*AttendanceSession, error) {
 	sess, err := s.repo.SessionByID(ctx, schoolID, sessionID)
 	if err != nil {
@@ -180,24 +191,23 @@ func (s *Service) CloseSession(ctx context.Context, schoolID, sessionID string) 
 		}
 		return nil, err
 	}
-	applied, err := s.repo.CloseSession(ctx, schoolID, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	if applied {
-		// Emit only on the open->closed transition; replays stay silent so
-		// the at-least-once stream is not spammed by double closes (#49).
-		s.emit(ctx, schoolID, sessionID, "attendance.SessionClosed", map[string]any{
+	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		ok, err := s.repo.CloseSessionTx(ctx, tx, schoolID, sessionID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			// Replay: no open->closed transition, stay silent so the
+			// at-least-once stream is not spammed by double closes (#49).
+			return nil
+		}
+		_, err = events.Record(ctx, tx, &schoolID, sessionID, "attendance.SessionClosed", 1, map[string]any{
 			"class_group_id": sess.ClassGroupID,
 			"date":           sess.Date,
 		})
+		return err
+	}); err != nil {
+		return nil, err
 	}
 	return s.repo.SessionByID(ctx, schoolID, sessionID)
-}
-
-func (s *Service) emit(ctx context.Context, schoolID, aggregateID, eventType string, payload map[string]any) {
-	if s.pool == nil {
-		return
-	}
-	_, _ = events.Record(ctx, s.pool, &schoolID, aggregateID, eventType, 1, payload)
 }
