@@ -1,29 +1,41 @@
 /**
  * Typed fetch client for the Skolara API.
  *
- * Auth model: the API sets a HttpOnly refresh cookie; the short-lived access
- * token lives in memory/localStorage. On a 401 the client attempts ONE
- * refresh-and-retry before surfacing the error. Tenant context is sent via
- * X-School-ID (server derives it from the verified session, never payloads).
+ * Auth model (ADR-011): the API sets a HttpOnly refresh cookie
+ * (`skolara_refresh`, see services/api/internal/identity/http.go); the
+ * short-lived access token lives in MEMORY ONLY — it is never persisted, so an
+ * XSS payload cannot steal a long-lived session. On boot the app exchanges the
+ * refresh cookie for a fresh access token (silent refresh). On a 401 the
+ * client performs exactly one single-flight refresh-and-retry: concurrent 401s
+ * share the same in-flight refresh instead of racing (which used to present an
+ * already-rotated refresh token and trip family revocation). Tenant context is
+ * sent via X-School-ID (server derives it from the verified session, never
+ * payloads).
  */
 
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 
-const TOKEN_KEY = "skolara_access_token";
 const SCHOOL_KEY = "skolara_school_id";
 
+/**
+ * Access token, module-scoped and never persisted. `null` before the first
+ * successful login/silent refresh and after logout/session expiry.
+ */
+let accessToken: string | null = null;
+
 export function getAccessToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(TOKEN_KEY);
+  return accessToken;
 }
 
 export function setAccessToken(token: string | null): void {
-  if (typeof window === "undefined") return;
-  if (token) window.localStorage.setItem(TOKEN_KEY, token);
-  else window.localStorage.removeItem(TOKEN_KEY);
+  accessToken = token;
 }
 
+/**
+ * The selected school is a non-secret UI preference (which tenant workspace to
+ * open); it is the ONLY value kept in localStorage.
+ */
 export function getSchoolId(): string | null {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem(SCHOOL_KEY);
@@ -50,7 +62,7 @@ export class ApiError extends Error {
 export interface RequestOptions {
   method?: string;
   body?: unknown;
-  /** Skip the automatic refresh-and-retry (used by the refresh call itself). */
+  /** Skip the automatic refresh-and-retry (used by the login call itself). */
   noRetry?: boolean;
 }
 
@@ -60,19 +72,66 @@ export interface SessionResponse {
   expiresIn: number;
 }
 
-/** Exchange the refresh cookie for a fresh access token. */
-export async function refreshSession(): Promise<SessionResponse | null> {
-  const res = await fetch(`${API_URL}/api/v1/auth/refresh`, {
-    method: "POST",
-    credentials: "include",
-  });
-  if (!res.ok) return null;
-  return (await res.json()) as SessionResponse;
+/**
+ * Normalized refresh outcome (never throws — network failures used to escape
+ * as raw TypeErrors): `unauthenticated` means the refresh cookie was rejected
+ * (session definitively over); `network` means the call could not complete and
+ * is transient.
+ */
+export type RefreshOutcome =
+  | { ok: true; session: SessionResponse }
+  | { ok: false; reason: "unauthenticated" | "network" };
+
+/**
+ * Single-flight refresh: one shared in-flight promise for all concurrent 401s.
+ * The refresh endpoint ROTATES the refresh cookie on every call and revokes
+ * the token family on reuse — concurrent refreshes would present an
+ * already-used token and hard-logout the user.
+ */
+let refreshInFlight: Promise<RefreshOutcome> | null = null;
+
+async function doRefresh(): Promise<RefreshOutcome> {
+  try {
+    const res = await fetch(`${API_URL}/api/v1/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!res.ok) return { ok: false, reason: "unauthenticated" };
+    const session = (await res.json()) as SessionResponse;
+    return { ok: true, session };
+  } catch {
+    return { ok: false, reason: "network" };
+  }
+}
+
+export function refreshSession(): Promise<RefreshOutcome> {
+  if (!refreshInFlight) {
+    refreshInFlight = doRefresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+/**
+ * Session-expired hook consumed by SessionProvider: invoked exactly when the
+ * session is DEFINITIVELY over (refresh cookie rejected), so the provider can
+ * reset its state and route to /login. Never fires for transient network
+ * failures or for plain 401s like a rejected login attempt.
+ */
+let onSessionExpired: (() => void) | null = null;
+
+export function setOnSessionExpired(handler: (() => void) | null): void {
+  onSessionExpired = handler;
+}
+
+function notifySessionExpired(): void {
+  onSessionExpired?.();
 }
 
 /**
  * Perform an API request with bearer auth, tenant header, and one
- * refresh-and-retry on 401.
+ * single-flight refresh-and-retry on 401.
  */
 export async function apiFetch<T>(
   path: string,
@@ -97,12 +156,20 @@ export async function apiFetch<T>(
 
   let res = await doFetch();
 
+  // One refresh-and-retry; concurrent 401s coalesce onto the same refresh.
+  // `sessionDefinitivelyOver` distinguishes "refresh cookie rejected" (logout)
+  // from transient failures (surface the error, keep the session).
+  let sessionDefinitivelyOver = false;
   if (res.status === 401 && !noRetry) {
-    const session = await refreshSession();
-    if (session) {
-      setAccessToken(session.accessToken);
+    const outcome = await refreshSession();
+    if (outcome.ok) {
+      setAccessToken(outcome.session.accessToken);
       res = await doFetch();
+      if (res.status === 401) sessionDefinitivelyOver = true;
+    } else if (outcome.reason === "unauthenticated") {
+      sessionDefinitivelyOver = true;
     }
+    // reason === "network": transient — the 401 below is surfaced as-is.
   }
 
   if (res.status === 204) return undefined as T;
@@ -111,6 +178,12 @@ export async function apiFetch<T>(
 
   if (!res.ok) {
     if (res.status === 401) setAccessToken(null);
+    if (sessionDefinitivelyOver) {
+      // Session over: drop the tenant preference too (shared-machine leak) and
+      // let the provider reset + redirect.
+      setSchoolId(null);
+      notifySessionExpired();
+    }
     const envelope = payload as { error?: { code?: string; message?: string } } | null;
     throw new ApiError(
       res.status,

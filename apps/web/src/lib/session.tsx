@@ -9,8 +9,19 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { apiFetch, getAccessToken, getSchoolId, setAccessToken, setSchoolId } from "./api";
+import { useRouter } from "next/navigation";
+import {
+  ApiError,
+  apiFetch,
+  getAccessToken,
+  getSchoolId,
+  refreshSession,
+  setAccessToken,
+  setOnSessionExpired,
+  setSchoolId,
+} from "./api";
 import type { Me, Membership } from "./permissions";
+import { AUTH_HINT_COOKIE_NAME } from "./auth-cookies";
 
 interface SessionState {
   /** null while loading; undefined when logged out. */
@@ -18,6 +29,8 @@ interface SessionState {
   memberships: Membership[];
   activeSchoolId: string | null;
   loading: boolean;
+  /** Bootstrap failure (e.g. API unreachable) — distinct from being logged out. */
+  error: string | null;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   switchSchool: (schoolId: string) => void;
@@ -29,25 +42,72 @@ const SessionContext = createContext<SessionState>({
   memberships: [],
   activeSchoolId: null,
   loading: true,
+  error: null,
   login: async () => {},
   logout: async () => {},
   switchSchool: () => {},
   reload: async () => {},
 });
 
+/**
+ * Web-origin session-hint cookie for the middleware guard: presence-only,
+ * carries no secret (the real credentials stay in the HttpOnly refresh cookie
+ * and the memory-only access token). Set on login, cleared on logout and
+ * session expiry so shared machines don't render the shell for the next user.
+ */
+function setAuthHint(present: boolean): void {
+  if (typeof document === "undefined") return;
+  const secure = window.location.protocol === "https:" ? "; Secure" : "";
+  if (present) {
+    document.cookie = `${AUTH_HINT_COOKIE_NAME}=1; Path=/; SameSite=Lax${secure}`;
+  } else {
+    document.cookie = `${AUTH_HINT_COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax${secure}`;
+  }
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [activeSchoolId, setActiveSchoolId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
 
+  const clearSessionState = useCallback(() => {
+    setAccessToken(null);
+    setSchoolId(null);
+    setActiveSchoolId(null);
+    setMemberships([]);
+    setMe(undefined);
+    setAuthHint(false);
+  }, []);
+
+  /**
+   * ADR-011: the access token is memory-only, so after every full page load
+   * the session is rebuilt with a silent /auth/refresh (the HttpOnly refresh
+   * cookie rides along). A network blip is NOT a logout: one silent retry,
+   * then an explicit error state the user can retry from.
+   */
   const reload = useCallback(async () => {
-    if (!getAccessToken()) {
-      setMe(undefined);
-      setLoading(false);
-      return;
-    }
+    setLoading(true);
+    setError(null);
     try {
+      if (!getAccessToken()) {
+        let outcome = await refreshSession();
+        if (!outcome.ok && outcome.reason === "network") {
+          outcome = await refreshSession(); // one silent retry
+        }
+        if (!outcome.ok) {
+          if (outcome.reason === "network") {
+            setError("Cannot reach the server. Check your connection and try again.");
+          } else {
+            clearSessionState();
+          }
+          return;
+        }
+        setAccessToken(outcome.session.accessToken);
+        setAuthHint(true);
+      }
       const [meRes, membershipsRes] = await Promise.all([
         apiFetch<Me>("/api/v1/me"),
         apiFetch<Membership[]>("/api/v1/me/memberships"),
@@ -61,16 +121,39 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           : membershipsRes[0]?.schoolId ?? null;
       setActiveSchoolId(active);
       setSchoolId(active);
-    } catch {
-      setMe(undefined);
+      setAuthHint(true);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        // Definitive 401 already cleared credentials + notified expiry.
+        clearSessionState();
+      } else {
+        setError(
+          err instanceof Error && err.message
+            ? `${err.message} — try again.`
+            : "Something went wrong while loading your session — try again.",
+        );
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [clearSessionState]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  /**
+   * Invoked by the api client when the refresh cookie is definitively rejected
+   * (family revocation / expiry): reset provider state and return to /login.
+   */
+  useEffect(() => {
+    setOnSessionExpired(() => {
+      clearSessionState();
+      setLoading(false);
+      router.replace("/login");
+    });
+    return () => setOnSessionExpired(null);
+  }, [clearSessionState, router]);
 
   const login = useCallback(
     async (email: string, password: string) => {
@@ -80,6 +163,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         noRetry: true,
       });
       setAccessToken(session.accessToken);
+      setAuthHint(true);
+      setError(null);
       await reload();
     },
     [reload],
@@ -89,11 +174,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     try {
       await apiFetch("/api/v1/auth/logout", { method: "POST", noRetry: true });
     } finally {
-      setAccessToken(null);
-      setMe(undefined);
-      setMemberships([]);
+      // Clear everything, including the persisted school preference — on a
+      // shared machine the next visitor must not inherit tenant context.
+      clearSessionState();
+      setLoading(false);
     }
-  }, []);
+  }, [clearSessionState]);
 
   const switchSchool = useCallback((schoolId: string) => {
     setSchoolId(schoolId);
@@ -102,8 +188,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ me, memberships, activeSchoolId, loading, login, logout, switchSchool, reload }),
-    [me, memberships, activeSchoolId, loading, login, logout, switchSchool, reload],
+    () => ({
+      me,
+      memberships,
+      activeSchoolId,
+      loading,
+      error,
+      login,
+      logout,
+      switchSchool,
+      reload,
+    }),
+    [me, memberships, activeSchoolId, loading, error, login, logout, switchSchool, reload],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
