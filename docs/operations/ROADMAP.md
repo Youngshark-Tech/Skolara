@@ -4,11 +4,12 @@ Post-onboarding engineering roadmap. Order reflects dependency and risk.
 
 ## Wave 1 — Onboarding hardening (immediate)
 
-- [ ] **CI runners**: re-enable GitHub Actions (account billing) — the workflows exist; gates are already codified (`ci.yml`) plus the local equivalents
+- [ ] **CI runners**: re-enable GitHub Actions (org billing/verification hold, #2) — all workflows ARE wired (`ci.yml`, 9 jobs) and locally gate-equivalent; only the runtime is blocked
+- [x] Transactional outbox at every call site + bounded in-process rate limiter (#52) — Redis-backed shared limiter below remains for multi-replica
 - [ ] Shared Redis rate limiter (multi-replica ready); middleware port exists
-- [ ] `/metrics` edge ACL + HSTS at the proxy (runbook §4)
+- [x] `/metrics` edge ACL + alert rules documented for operators (runbook §4) — proxy deployment action remains
 - [ ] Password reset / account recovery (email verification groundwork)
-- [ ] Web: academics + attendance + finance workspaces on the established pattern (contract already documents every endpoint)
+- [x] Web: enrollments workspace live (admit story, #58); students + command center fully interactive — academics/attendance/finance workspaces remain on the established pattern (contract already documents every endpoint)
 - [ ] School onboarding wizard (groups → school → members → academics) in the web shell
 
 ## Wave 2 — Notification fabric & sync

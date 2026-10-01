@@ -1,18 +1,35 @@
 #!/usr/bin/env bash
 # Skolara live E2E smoke — exercises the full product loop over real HTTP
 # against a running API (SKOLARA_BOOTSTRAP_ADMIN_* configured).
+#
+# Requirements: bash, curl, python3 (JSON parsing + HMAC webhook signature).
 # Usage: ./scripts/e2e-smoke.sh [BASE_URL]   (default http://127.0.0.1:8080)
+#
+# Prerequisites (dev defaults ship in infrastructure/docker-compose.yml):
+#   SKOLARA_BOOTSTRAP_ADMIN_EMAIL=admin@skolara.test
+#   SKOLARA_BOOTSTRAP_ADMIN_PASSWORD=<the value the API was started with>
+#   SKOLARA_WEBHOOK_SECRET=dev-webhook-secret-0123456789abcdef
+# See docs/operations/RUNBOOK.md §9.
 set -euo pipefail
 
 BASE="${1:-http://127.0.0.1:8080}"
 EMAIL="admin@skolara.test"
-PASSWORD='S0pera!Admin2026'
+PASSWORD="${SKOLARA_BOOTSTRAP_ADMIN_PASSWORD:-S0pera!Admin2026}"
+WEBHOOK_SECRET="${SKOLARA_WEBHOOK_SECRET:-dev-webhook-secret-0123456789abcdef}"
 PASS=0; FAIL=0
+
+# Session cookie jar in a private temp dir, always cleaned up.
+TMPDIR_SMOKE="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR_SMOKE"' EXIT
+COOKIE_JAR="$TMPDIR_SMOKE/cookies.txt"
 
 say()  { printf '%s\n' "$*"; }
 ok()   { PASS=$((PASS+1)); say "  ✓ $*"; }
 bad()  { FAIL=$((FAIL+1)); say "  ✗ $*"; }
 check(){ if [ "$1" = "$2" ]; then ok "$3"; else bad "$3 (want $2, got $1)"; fi }
+
+# Every HTTP call is bounded — a hung endpoint fails the check, not the run.
+curl() { command curl --max-time 10 "$@"; }
 
 jsonget() { python3 -c "
 import sys, json
@@ -31,7 +48,7 @@ code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/healthz"); check "$code" 20
 code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/readyz"); check "$code" 200 "readyz dependencies"
 
 # --- auth -------------------------------------------------------------------
-LOGIN=$(curl -s -c /tmp/sk-cookies.txt -H 'Content-Type: application/json' \
+LOGIN=$(curl -s -c "$COOKIE_JAR" -H 'Content-Type: application/json' \
   -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" "$BASE/api/v1/auth/login")
 TOKEN=$(echo "$LOGIN" | jsonget "['accessToken']" 2>/dev/null || true)
 if [ -n "$TOKEN" ]; then ok "login issued access token"; else bad "login failed: $LOGIN"; exit 1; fi
@@ -42,13 +59,13 @@ ROLES=$(echo "$ME" | jsonget "['roles'][0]")
 [ "$ROLES" = "platform_admin" ] && ok "me resolves platform_admin" || bad "me roles: $ME"
 
 # refresh rotation
-REFRESH=$(curl -s -X POST -b /tmp/sk-cookies.txt -c /tmp/sk-cookies.txt "$BASE/api/v1/auth/refresh")
+REFRESH=$(curl -s -X POST -b "$COOKIE_JAR" -c "$COOKIE_JAR" "$BASE/api/v1/auth/refresh")
 NEW_TOKEN=$(echo "$REFRESH" | jsonget "['accessToken']" 2>/dev/null || true)
 [ -n "$NEW_TOKEN" ] && ok "refresh rotates session" || bad "refresh failed: $REFRESH"
 AUTH="Authorization: Bearer $NEW_TOKEN"
 
 # --- tenancy ----------------------------------------------------------------
-SUFFIX=$RANDOM
+SUFFIX="${RANDOM}${$$}"   # collision-safe per run (RANDOM + PID)
 SCHOOL=$(curl -s -H "$AUTH" -H 'Content-Type: application/json' \
   -d "{\"code\":\"SMK-$SUFFIX\",\"name\":\"Smoke School $SUFFIX\"}" "$BASE/api/v1/schools")
 SCHOOL_ID=$(echo "$SCHOOL" | jsonget "['id']")
@@ -57,9 +74,9 @@ SCH="X-School-ID: $SCHOOL_ID"
 
 # membership for the admin (needed for school-scoped flows)
 ADMIN_ID=$(echo "$ME" | jsonget "['id']")
-curl -s -o /dev/null -H "$AUTH" -H 'Content-Type: application/json' \
-  -d "{\"userId\":\"$ADMIN_ID\",\"role\":\"school_admin\"}" "$BASE/api/v1/schools/$SCHOOL_ID/members"
-ok "admin granted school_admin membership"
+MEMBER_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "$AUTH" -H 'Content-Type: application/json' \
+  -d "{\"userId\":\"$ADMIN_ID\",\"role\":\"school_admin\"}" "$BASE/api/v1/schools/$SCHOOL_ID/members")
+check "$MEMBER_CODE" 204 "admin granted school_admin membership"
 
 # --- students ---------------------------------------------------------------
 LEARNER=$(curl -s -H "$AUTH" -H "$SCH" -H 'Content-Type: application/json' \
@@ -132,10 +149,10 @@ PAYMENT_ID=$(echo "$PAYMENT" | jsonget "['id']")
 [ -n "$PAYMENT_ID" ] && ok "payment intent recorded (pending)" || bad "payment: $PAYMENT"
 
 BODY="{\"schoolId\":\"$SCHOOL_ID\",\"eventId\":\"smoke-evt-$SUFFIX\",\"paymentId\":\"$PAYMENT_ID\",\"status\":\"confirmed\"}"
-SIG=$(BODY="$BODY" python3 - <<'PYEOF'
+SIG=$(BODY="$BODY" SECRET="$WEBHOOK_SECRET" python3 - <<'PYEOF'
 import hmac, hashlib, os
 body = os.environ["BODY"].encode()
-print(hmac.new(b'dev-webhook-secret-0123456789abcdef', body, hashlib.sha256).hexdigest())
+print(hmac.new(os.environ["SECRET"].encode(), body, hashlib.sha256).hexdigest())
 PYEOF
 )
 WH=$(curl -s -H 'Content-Type: application/json' -H "X-Skolar-Signature: $SIG" \
