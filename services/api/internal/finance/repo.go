@@ -31,7 +31,7 @@ func scanAccount(row pgx.Row) (*LedgerAccount, error) {
 func (r *pgRepo) CreateAccount(ctx context.Context, schoolID string, a *LedgerAccount) error {
 	return r.pool.QueryRow(ctx,
 		`INSERT INTO ledger_accounts (id, school_id, code, name, type, purpose, currency)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING `+accountCols,
+                 VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING `+accountCols,
 		a.ID, schoolID, a.Code, a.Name, string(a.Type), a.Purpose, a.Currency).
 		Scan(&a.ID, &a.SchoolID, &a.Code, &a.Name, &a.Type, &a.Purpose, &a.Currency, &a.CreatedAt)
 }
@@ -79,8 +79,8 @@ func (r *pgRepo) InsertEntryTx(ctx context.Context, tx postgres.Querier, e *Jour
 	{
 		if err := tx.QueryRow(ctx,
 			`INSERT INTO journal_entries (id, school_id, entry_date, description, source, source_ref, actor_id, correlation_id)
-			 VALUES ($1,$2,$3::date,$4,$5,$6,NULLIF($7,'')::uuid,$8)
-			 RETURNING created_at`,
+                         VALUES ($1,$2,$3::date,$4,$5,$6,NULLIF($7,'')::uuid,$8)
+                         RETURNING created_at`,
 			e.ID, e.SchoolID, e.EntryDate, e.Description, e.Source, e.SourceRef, e.ActorID, e.CorrelationID).
 			Scan(&e.CreatedAt); err != nil {
 			return err
@@ -89,7 +89,7 @@ func (r *pgRepo) InsertEntryTx(ctx context.Context, tx postgres.Querier, e *Jour
 			line := &e.Lines[i]
 			if err := tx.QueryRow(ctx,
 				`INSERT INTO journal_lines (entry_id, school_id, account_id, debit_minor, credit_minor)
-				 VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+                                 VALUES ($1,$2,$3,$4,$5) RETURNING id`,
 				e.ID, e.SchoolID, line.AccountID, line.DebitMinor, line.CreditMinor).
 				Scan(&line.ID); err != nil {
 				return err
@@ -104,7 +104,7 @@ func (r *pgRepo) EntryByID(ctx context.Context, schoolID, id string) (*JournalEn
 	e := &JournalEntry{}
 	err := r.pool.QueryRow(ctx,
 		`SELECT id, school_id, entry_date::text, description, source, source_ref, COALESCE(actor_id::text,''), correlation_id, created_at
-		 FROM journal_entries WHERE id = $1 AND school_id = $2`, id, schoolID).
+                 FROM journal_entries WHERE id = $1 AND school_id = $2`, id, schoolID).
 		Scan(&e.ID, &e.SchoolID, &e.EntryDate, &e.Description, &e.Source, &e.SourceRef, &e.ActorID, &e.CorrelationID, &e.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -114,7 +114,7 @@ func (r *pgRepo) EntryByID(ctx context.Context, schoolID, id string) (*JournalEn
 	}
 	rows, err := r.pool.Query(ctx,
 		`SELECT id, entry_id, account_id, debit_minor, credit_minor
-		 FROM journal_lines WHERE entry_id = $1 ORDER BY id`, id)
+                 FROM journal_lines WHERE entry_id = $1 ORDER BY id`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -172,8 +172,8 @@ func (r *pgRepo) ClaimIdempotencyKey(ctx context.Context, tx postgres.Querier, s
 	var resp *string
 	err := tx.QueryRow(ctx,
 		`INSERT INTO idempotency_keys (scope, key, school_id, response) VALUES ($1,$2,$3,$4::jsonb)
-		 ON CONFLICT (scope, key) DO UPDATE SET response = idempotency_keys.response
-		 RETURNING response IS NOT DISTINCT FROM $4::jsonb, response::text`,
+                 ON CONFLICT (scope, key) DO UPDATE SET response = idempotency_keys.response
+                 RETURNING response IS NOT DISTINCT FROM $4::jsonb, response::text`,
 		scope, key, schoolID, claimReservedResponse).Scan(&owned, &resp)
 	if err != nil {
 		return false, nil, err
@@ -186,7 +186,7 @@ func (r *pgRepo) ClaimIdempotencyKey(ctx context.Context, tx postgres.Querier, s
 func (r *pgRepo) StoreIdempotencyKey(ctx context.Context, tx postgres.Querier, scope, key, schoolID string, result []byte) error {
 	_, err := tx.Exec(ctx,
 		`INSERT INTO idempotency_keys (scope, key, school_id, response) VALUES ($1,$2,$3,$4)
-		 ON CONFLICT (scope, key) DO UPDATE SET response = EXCLUDED.response, school_id = EXCLUDED.school_id`,
+                 ON CONFLICT (scope, key) DO UPDATE SET response = EXCLUDED.response, school_id = EXCLUDED.school_id`,
 		scope, key, schoolID, result)
 	return err
 }
@@ -196,8 +196,8 @@ func (r *pgRepo) StoreIdempotencyKey(ctx context.Context, tx postgres.Querier, s
 func (r *pgRepo) CreateFeeStructure(ctx context.Context, schoolID string, fs *FeeStructure) error {
 	return r.pool.QueryRow(ctx,
 		`INSERT INTO fee_structures (id, school_id, name, class_group_id, academic_year_id, term_id, amount_minor, currency)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-		 RETURNING id, school_id, name, class_group_id, academic_year_id, term_id, amount_minor, currency, created_at`,
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                 RETURNING id, school_id, name, class_group_id, academic_year_id, term_id, amount_minor, currency, created_at`,
 		fs.ID, schoolID, fs.Name, fs.ClassGroupID, fs.AcademicYearID, fs.TermID, fs.AmountMinor, fs.Currency).
 		Scan(&fs.ID, &fs.SchoolID, &fs.Name, &fs.ClassGroupID, &fs.AcademicYearID, &fs.TermID, &fs.AmountMinor, &fs.Currency, &fs.CreatedAt)
 }
@@ -205,7 +205,7 @@ func (r *pgRepo) CreateFeeStructure(ctx context.Context, schoolID string, fs *Fe
 func (r *pgRepo) ListFeeStructures(ctx context.Context, schoolID string) ([]*FeeStructure, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT id, school_id, name, class_group_id, academic_year_id, term_id, amount_minor, currency, created_at
-		 FROM fee_structures WHERE school_id = $1 ORDER BY created_at DESC`, schoolID)
+                 FROM fee_structures WHERE school_id = $1 ORDER BY created_at DESC`, schoolID)
 	if err != nil {
 		return nil, err
 	}
@@ -225,35 +225,41 @@ func (r *pgRepo) ListFeeStructures(ctx context.Context, schoolID string) ([]*Fee
 
 func (r *pgRepo) InsertInvoice(ctx context.Context, inv *Invoice) error {
 	return r.pool.WithinTx(ctx, func(tx postgres.Querier) error {
-		if err := tx.QueryRow(ctx,
-			`INSERT INTO invoices (id, school_id, learner_id, fee_structure_id, term_id, due_date, currency)
-			 VALUES ($1,$2,$3,$4,$5,$6::date,$7)
-			 RETURNING created_at, status`,
-			inv.ID, inv.SchoolID, inv.LearnerID, inv.FeeStructureID, inv.TermID, inv.DueDate, inv.Currency).
-			Scan(&inv.CreatedAt, &inv.Status); err != nil {
-			return err
-		}
-		for i := range inv.Lines {
-			line := &inv.Lines[i]
-			if err := tx.QueryRow(ctx,
-				`INSERT INTO invoice_lines (invoice_id, description, amount_minor)
-				 VALUES ($1,$2,$3) RETURNING id`,
-				inv.ID, line.Description, line.AmountMinor).Scan(&line.ID); err != nil {
-				return err
-			}
-			line.InvoiceID = inv.ID
-		}
-		// Derived total comes back with the invoice on read; fill it here too.
-		return tx.QueryRow(ctx,
-			`SELECT COALESCE(SUM(amount_minor),0) FROM invoice_lines WHERE invoice_id = $1`, inv.ID).
-			Scan(&inv.TotalMinor)
+		return r.InsertInvoiceTx(ctx, tx, inv)
 	})
 }
 
+// InsertInvoiceTx is InsertInvoice on a caller-owned transaction so the
+// invoice write and its outbox event commit atomically (issue #52).
+func (r *pgRepo) InsertInvoiceTx(ctx context.Context, q postgres.Querier, inv *Invoice) error {
+	if err := q.QueryRow(ctx,
+		`INSERT INTO invoices (id, school_id, learner_id, fee_structure_id, term_id, due_date, currency)
+                 VALUES ($1,$2,$3,$4,$5,$6::date,$7)
+                 RETURNING created_at, status`,
+		inv.ID, inv.SchoolID, inv.LearnerID, inv.FeeStructureID, inv.TermID, inv.DueDate, inv.Currency).
+		Scan(&inv.CreatedAt, &inv.Status); err != nil {
+		return err
+	}
+	for i := range inv.Lines {
+		line := &inv.Lines[i]
+		if err := q.QueryRow(ctx,
+			`INSERT INTO invoice_lines (invoice_id, description, amount_minor)
+                         VALUES ($1,$2,$3) RETURNING id`,
+			inv.ID, line.Description, line.AmountMinor).Scan(&line.ID); err != nil {
+			return err
+		}
+		line.InvoiceID = inv.ID
+	}
+	// Derived total comes back with the invoice on read; fill it here too.
+	return q.QueryRow(ctx,
+		`SELECT COALESCE(SUM(amount_minor),0) FROM invoice_lines WHERE invoice_id = $1`, inv.ID).
+		Scan(&inv.TotalMinor)
+}
+
 const invoiceDerived = `i.id, i.school_id, i.learner_id, i.fee_structure_id, i.term_id, i.due_date::text,
-		i.currency, i.status, i.created_at,
-		COALESCE((SELECT SUM(l.amount_minor) FROM invoice_lines l WHERE l.invoice_id = i.id), 0) AS total_minor,
-		COALESCE((SELECT SUM(a.amount_minor) FROM payment_allocations a WHERE a.invoice_id = i.id), 0) AS paid_minor`
+                i.currency, i.status, i.created_at,
+                COALESCE((SELECT SUM(l.amount_minor) FROM invoice_lines l WHERE l.invoice_id = i.id), 0) AS total_minor,
+                COALESCE((SELECT SUM(a.amount_minor) FROM payment_allocations a WHERE a.invoice_id = i.id), 0) AS paid_minor`
 
 func scanInvoice(row pgx.Row) (*Invoice, error) {
 	var inv Invoice
@@ -294,15 +300,15 @@ func (r *pgRepo) ListInvoices(ctx context.Context, schoolID string, status *Invo
 	var total int
 	if err := r.pool.QueryRow(ctx,
 		`SELECT count(*) FROM invoices i
-		 WHERE i.school_id = $1 AND ($2::text IS NULL OR i.status = $2::text) AND ($3::uuid IS NULL OR i.learner_id = $3)`,
+                 WHERE i.school_id = $1 AND ($2::text IS NULL OR i.status = $2::text) AND ($3::uuid IS NULL OR i.learner_id = $3)`,
 		schoolID, st, ln).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	rows, err := r.pool.Query(ctx,
 		`SELECT `+invoiceDerived+` FROM invoices i
-		 WHERE i.school_id = $1 AND ($2::text IS NULL OR i.status = $2::text) AND ($3::uuid IS NULL OR i.learner_id = $3)
-		 ORDER BY i.created_at DESC
-		 LIMIT $4 OFFSET $5`,
+                 WHERE i.school_id = $1 AND ($2::text IS NULL OR i.status = $2::text) AND ($3::uuid IS NULL OR i.learner_id = $3)
+                 ORDER BY i.created_at DESC
+                 LIMIT $4 OFFSET $5`,
 		schoolID, st, ln, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -339,8 +345,8 @@ func (r *pgRepo) SetInvoiceStatus(ctx context.Context, q postgres.Querier, schoo
 func (r *pgRepo) VoidInvoiceGuarded(ctx context.Context, q postgres.Querier, schoolID, id string) (bool, error) {
 	tag, err := q.Exec(ctx,
 		`UPDATE invoices SET status = 'void'
-		 WHERE id = $1 AND school_id = $2 AND status <> 'void'
-		   AND NOT EXISTS (SELECT 1 FROM payment_allocations a WHERE a.invoice_id = invoices.id)`,
+                 WHERE id = $1 AND school_id = $2 AND status <> 'void'
+                   AND NOT EXISTS (SELECT 1 FROM payment_allocations a WHERE a.invoice_id = invoices.id)`,
 		id, schoolID)
 	if err != nil {
 		return false, err
@@ -353,8 +359,8 @@ func (r *pgRepo) VoidInvoiceGuarded(ctx context.Context, q postgres.Querier, sch
 func (r *pgRepo) InsertPayment(ctx context.Context, p *Payment) error {
 	return r.pool.QueryRow(ctx,
 		`INSERT INTO payments (id, school_id, invoice_id, payer_ref, amount_minor, currency, provider, provider_ref)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-		 RETURNING id, school_id, invoice_id, payer_ref, amount_minor, currency, provider, provider_ref, status, created_at, confirmed_at`,
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                 RETURNING id, school_id, invoice_id, payer_ref, amount_minor, currency, provider, provider_ref, status, created_at, confirmed_at`,
 		p.ID, p.SchoolID, p.InvoiceID, p.PayerRef, p.AmountMinor, p.Currency, p.Provider, p.ProviderRef).
 		Scan(&p.ID, &p.SchoolID, &p.InvoiceID, &p.PayerRef, &p.AmountMinor, &p.Currency, &p.Provider, &p.ProviderRef, &p.Status, &p.CreatedAt, &p.ConfirmedAt)
 }
@@ -387,7 +393,7 @@ func (r *pgRepo) PaymentByProviderRef(ctx context.Context, schoolID, provider, p
 func (r *pgRepo) MarkPaymentConfirmed(ctx context.Context, tx postgres.Querier, schoolID, id string) (bool, error) {
 	tag, err := tx.Exec(ctx,
 		`UPDATE payments SET status = 'confirmed', confirmed_at = now()
-		 WHERE id = $1 AND school_id = $2 AND status = 'pending'`,
+                 WHERE id = $1 AND school_id = $2 AND status = 'pending'`,
 		id, schoolID)
 	if err != nil {
 		return false, err
@@ -408,7 +414,7 @@ func (r *pgRepo) MarkPaymentFailed(ctx context.Context, schoolID, id string) (bo
 func (r *pgRepo) InsertAllocation(ctx context.Context, tx postgres.Querier, paymentID, invoiceID string, amountMinor int64) error {
 	_, err := tx.Exec(ctx,
 		`INSERT INTO payment_allocations (payment_id, invoice_id, amount_minor) VALUES ($1,$2,$3)
-		 ON CONFLICT (payment_id, invoice_id) DO NOTHING`,
+                 ON CONFLICT (payment_id, invoice_id) DO NOTHING`,
 		paymentID, invoiceID, amountMinor)
 	return err
 }
@@ -425,12 +431,12 @@ func (r *pgRepo) AllocatedMinor(ctx context.Context, tx postgres.Querier, invoic
 func (r *pgRepo) WalletBalances(ctx context.Context, schoolID string) ([]*WalletBalance, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT a.purpose, a.id, a.currency,
-			COALESCE(SUM(l.debit_minor), 0) - COALESCE(SUM(l.credit_minor), 0) AS balance_minor
-		 FROM ledger_accounts a
-		 LEFT JOIN journal_lines l ON l.account_id = a.id
-		 WHERE a.school_id = $1 AND a.purpose <> ''
-		 GROUP BY a.purpose, a.id, a.currency
-		 ORDER BY a.purpose`, schoolID)
+                        COALESCE(SUM(l.debit_minor), 0) - COALESCE(SUM(l.credit_minor), 0) AS balance_minor
+                 FROM ledger_accounts a
+                 LEFT JOIN journal_lines l ON l.account_id = a.id
+                 WHERE a.school_id = $1 AND a.purpose <> ''
+                 GROUP BY a.purpose, a.id, a.currency
+                 ORDER BY a.purpose`, schoolID)
 	if err != nil {
 		return nil, err
 	}

@@ -306,14 +306,20 @@ func (s *Service) CreateInvoice(ctx context.Context, schoolID, actorID string, i
 	for _, l := range in.Lines {
 		inv.Lines = append(inv.Lines, InvoiceLine{Description: l.Description, AmountMinor: l.AmountMinor})
 	}
-	if err := s.repo.InsertInvoice(ctx, inv); err != nil {
+	// Invoice + outbox event in ONE transaction (ADR-003, issue #52).
+	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		if err := s.repo.InsertInvoiceTx(ctx, tx, inv); err != nil {
+			return err
+		}
+		_, err := events.Record(ctx, tx, &schoolID, inv.ID, "finance.InvoiceCreated", 1, map[string]any{
+			"learner_id":  inv.LearnerID,
+			"total_minor": inv.TotalMinor,
+			"due_date":    inv.DueDate,
+		})
+		return err
+	}); err != nil {
 		return nil, err
 	}
-	s.emit(ctx, schoolID, inv.ID, "finance.InvoiceCreated", map[string]any{
-		"learner_id":  inv.LearnerID,
-		"total_minor": inv.TotalMinor,
-		"due_date":    inv.DueDate,
-	})
 	return s.repo.InvoiceByID(ctx, schoolID, inv.ID)
 }
 
@@ -662,11 +668,4 @@ func marshalResult(v map[string]any) ([]byte, error) {
 
 func unmarshalStored(raw string, out *map[string]any) error {
 	return json.Unmarshal([]byte(raw), out)
-}
-
-func (s *Service) emit(ctx context.Context, schoolID, aggregateID, eventType string, payload map[string]any) {
-	if s.pool == nil {
-		return
-	}
-	_, _ = events.Record(ctx, s.pool, &schoolID, aggregateID, eventType, 1, payload)
 }

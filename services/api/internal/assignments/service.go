@@ -115,15 +115,20 @@ func (s *Service) PublishAssignment(ctx context.Context, schoolID, actorID, id s
 			}
 		}
 	}
-	if err := s.repo.UpdateAssignmentStatus(ctx, schoolID, id, a.Status, AssignmentPublished); err != nil {
+	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		if err := s.repo.UpdateAssignmentStatusTx(ctx, tx, schoolID, id, a.Status, AssignmentPublished); err != nil {
+			return err
+		}
+		_, err := events.Record(ctx, tx, &schoolID, id, "assignments.AssignmentPublished", 1, map[string]any{
+			"class_group_id": a.ClassGroupID,
+			"subject_id":     a.SubjectID,
+			"teacher_id":     a.TeacherID,
+			"due_date":       a.DueDate,
+		})
+		return err
+	}); err != nil {
 		return nil, err
 	}
-	s.emit(ctx, schoolID, id, "assignments.AssignmentPublished", map[string]any{
-		"class_group_id": a.ClassGroupID,
-		"subject_id":     a.SubjectID,
-		"teacher_id":     a.TeacherID,
-		"due_date":       a.DueDate,
-	})
 	return s.repo.AssignmentByID(ctx, schoolID, id)
 }
 
@@ -211,8 +216,19 @@ func (s *Service) GradeAssignment(ctx context.Context, schoolID, actorID, assign
 	if strings.TrimSpace(grade) == "" {
 		return nil, ErrGradeRequired
 	}
-	sub, err := s.repo.GradeSubmission(ctx, schoolID, assignmentID, learnerID, strings.TrimSpace(grade), strings.TrimSpace(feedback))
-	if err != nil {
+	var sub *Submission
+	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		var err error
+		sub, err = s.repo.GradeSubmissionTx(ctx, tx, schoolID, assignmentID, learnerID, strings.TrimSpace(grade), strings.TrimSpace(feedback))
+		if err != nil {
+			return err
+		}
+		_, err = events.Record(ctx, tx, &schoolID, assignmentID, "assignments.SubmissionGraded", 1, map[string]any{
+			"learner_id": learnerID,
+			"grade":      sub.Grade,
+		})
+		return err
+	}); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			// CAS matched nothing: either the submission does not exist
 			// (404) or it is no longer 'submitted' (409 already graded) —
@@ -224,10 +240,6 @@ func (s *Service) GradeAssignment(ctx context.Context, schoolID, actorID, assign
 		}
 		return nil, err
 	}
-	s.emit(ctx, schoolID, assignmentID, "assignments.SubmissionGraded", map[string]any{
-		"learner_id": learnerID,
-		"grade":      sub.Grade,
-	})
 	return sub, nil
 }
 
@@ -260,11 +272,4 @@ func (s *Service) ownedBy(ctx context.Context, schoolID, actorID, id string) (*A
 		return nil, ErrNotOwner
 	}
 	return a, nil
-}
-
-func (s *Service) emit(ctx context.Context, schoolID, aggregateID, eventType string, payload map[string]any) {
-	if s.pool == nil {
-		return
-	}
-	_, _ = events.Record(ctx, s.pool, &schoolID, aggregateID, eventType, 1, payload)
 }

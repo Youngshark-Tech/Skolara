@@ -13,7 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Service implements students business rules.
+// Service implements students business rules. Mutations and their outbox
+// events run in one transaction (ADR-003, issue #52).
 type Service struct {
 	repo Repo
 	pool *postgres.Pool
@@ -89,15 +90,18 @@ func (s *Service) CreateLearner(ctx context.Context, schoolID string, in Learner
 		Gender:      strings.TrimSpace(in.Gender),
 		ExternalID:  optionalText(strings.TrimSpace(in.ExternalID)),
 	}
-	if err := s.repo.CreateLearner(ctx, l); err != nil {
+	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		if err := s.repo.CreateLearnerTx(ctx, tx, l); err != nil {
+			return err
+		}
+		_, err := events.Record(ctx, tx, &schoolID, l.ID, "students.LearnerCreated", 1,
+			map[string]any{"first_name": l.FirstName, "last_name": l.LastName, "external_id": l.ExternalID})
+		return err
+	}); err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrExternalIDTaken
 		}
 		return nil, err
-	}
-	if s.pool != nil {
-		_, _ = events.Record(ctx, s.pool, &schoolID, l.ID, "students.LearnerCreated", 1,
-			map[string]any{"first_name": l.FirstName, "last_name": l.LastName, "external_id": l.ExternalID})
 	}
 	return l, nil
 }
@@ -133,12 +137,15 @@ func (s *Service) CreateGuardian(ctx context.Context, schoolID string, in Guardi
 		return nil, fmt.Errorf("%w: invalid guardian email", ErrValidation)
 	}
 	g := &Guardian{ID: uuid.NewString(), FirstName: first, LastName: last, Phone: phone, Email: email}
-	if err := s.repo.CreateGuardian(ctx, g); err != nil {
-		return nil, err
-	}
-	if s.pool != nil {
-		_, _ = events.Record(ctx, s.pool, &schoolID, g.ID, "students.GuardianCreated", 1,
+	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		if err := s.repo.CreateGuardianTx(ctx, tx, g); err != nil {
+			return err
+		}
+		_, err := events.Record(ctx, tx, &schoolID, g.ID, "students.GuardianCreated", 1,
 			map[string]any{"first_name": g.FirstName, "last_name": g.LastName})
+		return err
+	}); err != nil {
+		return nil, err
 	}
 	return g, nil
 }
@@ -174,15 +181,18 @@ func (s *Service) LinkGuardian(ctx context.Context, schoolID, learnerID string, 
 		CanViewFinancials: in.CanViewFinancials,
 		CanViewAcademics:  in.CanViewAcademics,
 	}
-	if err := s.repo.CreateGuardianLink(ctx, link); err != nil {
+	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		if err := s.repo.CreateGuardianLinkTx(ctx, tx, link); err != nil {
+			return err
+		}
+		_, err := events.Record(ctx, tx, &schoolID, learnerID, "students.GuardianLinked", 1,
+			map[string]any{"guardian_id": link.GuardianID, "learner_id": link.LearnerID, "relationship": link.Relationship})
+		return err
+	}); err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrLinkExists
 		}
 		return nil, err
-	}
-	if s.pool != nil {
-		_, _ = events.Record(ctx, s.pool, &schoolID, learnerID, "students.GuardianLinked", 1,
-			map[string]any{"guardian_id": link.GuardianID, "learner_id": link.LearnerID, "relationship": link.Relationship})
 	}
 	return link, nil
 }
@@ -244,7 +254,14 @@ func (s *Service) EnrollLearner(ctx context.Context, schoolID string, in Enrollm
 		}
 		e.AcademicYearID = &in.AcademicYearID
 	}
-	if err := s.repo.CreateEnrollment(ctx, e); err != nil {
+	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		if err := s.repo.CreateEnrollmentTx(ctx, tx, e); err != nil {
+			return err
+		}
+		_, err := events.Record(ctx, tx, &schoolID, e.ID, "students.LearnerEnrolled", 1,
+			map[string]any{"learner_id": e.LearnerID, "school_id": schoolID, "status": string(e.Status)})
+		return err
+	}); err != nil {
 		if isUniqueViolation(err) {
 			// Backstop for the partial unique index on open enrollments.
 			return nil, ErrAlreadyEnrolled
@@ -255,10 +272,6 @@ func (s *Service) EnrollLearner(ctx context.Context, schoolID string, in Enrollm
 			return nil, fmt.Errorf("%w: classGroupId or academicYearId does not exist", ErrValidation)
 		}
 		return nil, err
-	}
-	if s.pool != nil {
-		_, _ = events.Record(ctx, s.pool, &schoolID, e.ID, "students.LearnerEnrolled", 1,
-			map[string]any{"learner_id": e.LearnerID, "school_id": schoolID, "status": string(e.Status)})
 	}
 	return e, nil
 }
@@ -290,15 +303,18 @@ func (s *Service) TransitionEnrollment(ctx context.Context, schoolID, enrollment
 	if containsState(endedAtStates, to) {
 		endedAt = ptrTime(time.Now().UTC())
 	}
-	if err := s.repo.UpdateEnrollmentStatus(ctx, e.ID, from, to, endedAt); err != nil {
+	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		if err := s.repo.UpdateEnrollmentStatusTx(ctx, tx, e.ID, from, to, endedAt); err != nil {
+			return err
+		}
+		_, err := events.Record(ctx, tx, &schoolID, e.ID, "students.EnrollmentStateChanged", 1,
+			map[string]any{"learner_id": e.LearnerID, "before": string(from), "after": string(to)})
+		return err
+	}); err != nil {
 		return nil, err
 	}
 	e.Status = to
 	e.EndedAt = endedAt
-	if s.pool != nil {
-		_, _ = events.Record(ctx, s.pool, &schoolID, e.ID, "students.EnrollmentStateChanged", 1,
-			map[string]any{"learner_id": e.LearnerID, "before": string(from), "after": string(to)})
-	}
 	return e, nil
 }
 

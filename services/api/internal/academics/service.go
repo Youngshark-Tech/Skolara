@@ -43,15 +43,20 @@ func (s *Service) CreateAcademicYear(ctx context.Context, schoolID, name, start,
 		EndDate:   end,
 		Status:    "planning",
 	}
-	if err := s.repo.CreateAcademicYear(ctx, schoolID, y); err != nil {
+	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		if err := s.repo.CreateAcademicYearTx(ctx, tx, schoolID, y); err != nil {
+			return err
+		}
+		_, err := events.Record(ctx, tx, &schoolID, y.ID, "academics.AcademicYearCreated", 1,
+			map[string]any{"name": y.Name, "start_date": y.StartDate, "end_date": y.EndDate})
+		return err
+	}); err != nil {
 		if isUniqueViolation(err) {
 			// unique (school, name) — same as subjects/classes (#50).
 			return nil, fmt.Errorf("%w: academic year name %q already exists", ErrNameTaken, name)
 		}
 		return nil, err
 	}
-	s.emit(ctx, schoolID, y.ID, "academics.AcademicYearCreated",
-		map[string]any{"name": y.Name, "start_date": y.StartDate, "end_date": y.EndDate})
 	return y, nil
 }
 
@@ -120,7 +125,11 @@ func (s *Service) CreateTerm(ctx context.Context, schoolID, yearID, name, start,
 			return err
 		}
 		createdTerm = term
-		return nil
+		// The event rides the same transaction as the term insert
+		// (ADR-003, issue #52).
+		_, err = events.Record(ctx, tx, &schoolID, term.ID, "academics.TermCreated", 1,
+			map[string]any{"name": term.Name, "academic_year_id": yearID, "start_date": start, "end_date": end})
+		return err
 	})
 	if overlapErr != nil {
 		return nil, overlapErr
@@ -131,8 +140,6 @@ func (s *Service) CreateTerm(ctx context.Context, schoolID, yearID, name, start,
 		}
 		return nil, txErr
 	}
-	s.emit(ctx, schoolID, createdTerm.ID, "academics.TermCreated",
-		map[string]any{"name": createdTerm.Name, "academic_year_id": yearID, "start_date": start, "end_date": end})
 	return createdTerm, nil
 }
 
@@ -185,14 +192,19 @@ func (s *Service) CreateClassGroup(ctx context.Context, schoolID, yearID, name s
 		return nil, err
 	}
 	c := &ClassGroup{ID: uuid.NewString(), SchoolID: schoolID, AcademicYearID: yearID, Name: name}
-	if err := s.repo.CreateClassGroup(ctx, schoolID, c); err != nil {
+	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		if err := s.repo.CreateClassGroupTx(ctx, tx, schoolID, c); err != nil {
+			return err
+		}
+		_, err := events.Record(ctx, tx, &schoolID, c.ID, "academics.ClassCreated", 1,
+			map[string]any{"name": c.Name, "academic_year_id": yearID})
+		return err
+	}); err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrNameTaken
 		}
 		return nil, err
 	}
-	s.emit(ctx, schoolID, c.ID, "academics.ClassCreated",
-		map[string]any{"name": c.Name, "academic_year_id": yearID})
 	return c, nil
 }
 
@@ -285,7 +297,14 @@ func (s *Service) AssignTeacher(ctx context.Context, schoolID, classGroupID, sub
 		SubjectID:    subjectID,
 		TeacherID:    teacherID,
 	}
-	if err := s.repo.CreateTeachingAssignment(ctx, schoolID, a); err != nil {
+	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		if err := s.repo.CreateTeachingAssignmentTx(ctx, tx, schoolID, a); err != nil {
+			return err
+		}
+		_, err := events.Record(ctx, tx, &schoolID, a.ID, "academics.TeacherAssigned", 1,
+			map[string]any{"class_group_id": classGroupID, "subject_id": subjectID, "teacher_id": teacherID})
+		return err
+	}); err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrAssignmentExists
 		}
@@ -294,8 +313,6 @@ func (s *Service) AssignTeacher(ctx context.Context, schoolID, classGroupID, sub
 		}
 		return nil, err
 	}
-	s.emit(ctx, schoolID, a.ID, "academics.TeacherAssigned",
-		map[string]any{"class_group_id": classGroupID, "subject_id": subjectID, "teacher_id": teacherID})
 	return a, nil
 }
 
@@ -309,15 +326,6 @@ func (s *Service) AssignmentsForClass(ctx context.Context, schoolID, classGroupI
 		return nil, err
 	}
 	return s.repo.AssignmentsForClass(ctx, schoolID, classGroupID)
-}
-
-// emit records an outbox event best-effort — like tenancy/students, a failed
-// event write must not fail the committed business operation.
-func (s *Service) emit(ctx context.Context, schoolID, aggregateID, eventType string, payload map[string]any) {
-	if s.pool == nil {
-		return
-	}
-	_, _ = events.Record(ctx, s.pool, &schoolID, aggregateID, eventType, 1, payload)
 }
 
 // validateRange checks both dates parse as strict YYYY-MM-DD and end >= start.

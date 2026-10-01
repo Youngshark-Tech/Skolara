@@ -10,6 +10,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/postgres"
 )
 
 // AssignmentStatus is the assignment lifecycle (mirrored by SQL CHECK).
@@ -108,6 +110,8 @@ type Repo interface {
 	AssignmentByID(ctx context.Context, schoolID, id string) (*Assignment, error)
 	ListAssignments(ctx context.Context, schoolID, classGroupID string, status *AssignmentStatus, limit, offset int) ([]*Assignment, int, error)
 	UpdateAssignmentStatus(ctx context.Context, schoolID, id string, from, to AssignmentStatus) error
+	// UpdateAssignmentStatusTx is UpdateAssignmentStatus on a caller-owned transaction (issue #52).
+	UpdateAssignmentStatusTx(ctx context.Context, q postgres.Querier, schoolID, id string, from, to AssignmentStatus) error
 
 	UpsertSubmission(ctx context.Context, sub *Submission) error
 	ClassGroupInSchool(ctx context.Context, schoolID, classGroupID string) (bool, error)
@@ -115,5 +119,7 @@ type Repo interface {
 	Submission(ctx context.Context, schoolID, assignmentID, learnerID string) (*Submission, error)
 	SubmissionsForAssignment(ctx context.Context, schoolID, assignmentID string) ([]*Submission, error)
 	GradeSubmission(ctx context.Context, schoolID, assignmentID, learnerID, grade, feedback string) (*Submission, error)
+	// GradeSubmissionTx is GradeSubmission on a caller-owned transaction (issue #52).
+	GradeSubmissionTx(ctx context.Context, q postgres.Querier, schoolID, assignmentID, learnerID, grade, feedback string) (*Submission, error)
 	ReturnSubmission(ctx context.Context, schoolID, assignmentID, learnerID string) (*Submission, error)
 }

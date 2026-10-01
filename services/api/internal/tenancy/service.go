@@ -26,18 +26,22 @@ var (
 )
 
 // CreateGroup validates and creates an education group, emitting
-// tenancy.GroupCreated v1 (platform-scope event: no school_id).
+// tenancy.GroupCreated v1 (platform-scope event: no school_id). The write and
+// the event commit in ONE transaction (ADR-003, issue #52).
 func (s *Service) CreateGroup(ctx context.Context, name, actorID string) (*EducationGroup, error) {
 	if name == "" || len(name) > 128 {
 		return nil, fmt.Errorf("%w: group name required (<=128 chars)", ErrValidation)
 	}
 	g := &EducationGroup{ID: newID(), Name: name}
-	if err := s.repo.CreateGroup(ctx, g); err != nil {
-		return nil, err
-	}
-	if s.pool != nil {
-		_, _ = events.Record(ctx, s.pool, nil, g.ID, "tenancy.GroupCreated", 1,
+	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		if err := s.repo.CreateGroupTx(ctx, tx, g); err != nil {
+			return err
+		}
+		_, err := events.Record(ctx, tx, nil, g.ID, "tenancy.GroupCreated", 1,
 			map[string]any{"name": g.Name, "actor_id": actorID})
+		return err
+	}); err != nil {
+		return nil, err
 	}
 	return g, nil
 }
@@ -69,15 +73,18 @@ func (s *Service) CreateSchool(ctx context.Context, code, name, groupID, actorID
 		gid = &groupID
 	}
 	school := &School{ID: newID(), Code: code, Name: name, GroupID: gid}
-	if err := s.repo.CreateSchool(ctx, school); err != nil {
+	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		if err := s.repo.CreateSchoolTx(ctx, tx, school); err != nil {
+			return err
+		}
+		_, err := events.Record(ctx, tx, &school.ID, school.ID, "tenancy.SchoolCreated", 1,
+			map[string]any{"code": school.Code, "name": school.Name})
+		return err
+	}); err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrCodeTaken
 		}
 		return nil, err
-	}
-	if s.pool != nil {
-		_, _ = events.Record(ctx, s.pool, &school.ID, school.ID, "tenancy.SchoolCreated", 1,
-			map[string]any{"code": school.Code, "name": school.Name})
 	}
 	return school, nil
 }
@@ -129,15 +136,18 @@ func (s *Service) AddMember(ctx context.Context, schoolID, userID, role string) 
 	if !ok {
 		return fmt.Errorf("%w: unknown role %q", ErrValidation, role)
 	}
-	if err := s.repo.AddMember(ctx, &Membership{UserID: userID, SchoolID: schoolID, Role: role, Status: "active"}); err != nil {
+	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
+		if err := s.repo.AddMemberTx(ctx, tx, &Membership{UserID: userID, SchoolID: schoolID, Role: role, Status: "active"}); err != nil {
+			return err
+		}
+		_, err := events.Record(ctx, tx, &schoolID, userID, "tenancy.MemberAdded", 1,
+			map[string]any{"school_id": schoolID, "user_id": userID, "role": role})
+		return err
+	}); err != nil {
 		if isFKViolation(err) {
 			return fmt.Errorf("%w: user %s does not exist", ErrValidation, userID)
 		}
 		return err
-	}
-	if s.pool != nil {
-		_, _ = events.Record(ctx, s.pool, &schoolID, userID, "tenancy.MemberAdded", 1,
-			map[string]any{"school_id": schoolID, "user_id": userID, "role": role})
 	}
 	return nil
 }

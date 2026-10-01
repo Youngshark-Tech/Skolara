@@ -6,6 +6,8 @@ package tenancy
 import (
 	"context"
 	"time"
+
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/postgres"
 )
 
 // School is the tenant root for all school-scoped data.
@@ -45,10 +47,15 @@ type Membership struct {
 // Repo is the persistence port.
 type Repo interface {
 	CreateGroup(ctx context.Context, g *EducationGroup) error
+	// CreateGroupTx is CreateGroup on a caller-owned transaction so the
+	// write and its outbox event commit atomically (issue #52).
+	CreateGroupTx(ctx context.Context, q postgres.Querier, g *EducationGroup) error
 	ListGroups(ctx context.Context) ([]*EducationGroup, error)
 	RoleExists(ctx context.Context, name string) (bool, error)
 
 	CreateSchool(ctx context.Context, s *School) error
+	// CreateSchoolTx is CreateSchool on a caller-owned transaction (issue #52).
+	CreateSchoolTx(ctx context.Context, q postgres.Querier, s *School) error
 	SchoolByID(ctx context.Context, id string) (*School, error)
 	SchoolByCode(ctx context.Context, code string) (*School, error)
 	ListSchools(ctx context.Context, groupID *string, limit, offset int) ([]*School, int, error)
@@ -57,6 +64,8 @@ type Repo interface {
 	ListCampuses(ctx context.Context, schoolID string, limit, offset int) ([]*Campus, int, error)
 
 	AddMember(ctx context.Context, m *Membership) error
+	// AddMemberTx is AddMember on a caller-owned transaction (issue #52).
+	AddMemberTx(ctx context.Context, q postgres.Querier, m *Membership) error
 	MembershipsForUser(ctx context.Context, userID string) ([]*Membership, error)
 	// HasActiveMembership reports whether the user holds ANY active
 	// membership at the school, regardless of role. Deterministic over all

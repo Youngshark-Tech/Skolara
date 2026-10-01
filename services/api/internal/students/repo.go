@@ -44,7 +44,13 @@ func scanLearner(row pgx.Row) (*Learner, error) {
 }
 
 func (r *pgRepo) CreateLearner(ctx context.Context, l *Learner) error {
-	return r.pool.QueryRow(ctx,
+	return r.CreateLearnerTx(ctx, r.pool, l)
+}
+
+// CreateLearnerTx is CreateLearner on a caller-owned transaction so the
+// insert and its outbox event commit atomically (issue #52).
+func (r *pgRepo) CreateLearnerTx(ctx context.Context, q postgres.Querier, l *Learner) error {
+	return q.QueryRow(ctx,
 		`INSERT INTO learners (id, first_name, last_name, middle_name, date_of_birth, gender, external_id)
                  VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING `+learnerCols,
 		l.ID, l.FirstName, l.LastName, l.MiddleName, l.DateOfBirth, l.Gender, l.ExternalID).
@@ -113,7 +119,12 @@ func scanGuardian(row pgx.Row) (*Guardian, error) {
 }
 
 func (r *pgRepo) CreateGuardian(ctx context.Context, g *Guardian) error {
-	return r.pool.QueryRow(ctx,
+	return r.CreateGuardianTx(ctx, r.pool, g)
+}
+
+// CreateGuardianTx is CreateGuardian on a caller-owned transaction (issue #52).
+func (r *pgRepo) CreateGuardianTx(ctx context.Context, q postgres.Querier, g *Guardian) error {
+	return q.QueryRow(ctx,
 		`INSERT INTO guardians (id, first_name, last_name, phone, email)
                  VALUES ($1,$2,$3,$4,$5) RETURNING `+guardianCols,
 		g.ID, g.FirstName, g.LastName, g.Phone, g.Email).
@@ -125,7 +136,12 @@ func (r *pgRepo) GuardianByID(ctx context.Context, id string) (*Guardian, error)
 }
 
 func (r *pgRepo) CreateGuardianLink(ctx context.Context, link *GuardianLink) error {
-	return r.pool.QueryRow(ctx,
+	return r.CreateGuardianLinkTx(ctx, r.pool, link)
+}
+
+// CreateGuardianLinkTx is CreateGuardianLink on a caller-owned transaction (issue #52).
+func (r *pgRepo) CreateGuardianLinkTx(ctx context.Context, q postgres.Querier, link *GuardianLink) error {
+	return q.QueryRow(ctx,
 		`INSERT INTO guardian_learner_links (guardian_id, learner_id, relationship, is_primary, can_view_financials, can_view_academics)
                  VALUES ($1,$2,$3,$4,$5,$6)
                  RETURNING guardian_id, learner_id, relationship, is_primary, can_view_financials, can_view_academics`,
@@ -174,7 +190,12 @@ func scanEnrollment(row pgx.Row) (*Enrollment, error) {
 }
 
 func (r *pgRepo) CreateEnrollment(ctx context.Context, e *Enrollment) error {
-	return r.pool.QueryRow(ctx,
+	return r.CreateEnrollmentTx(ctx, r.pool, e)
+}
+
+// CreateEnrollmentTx is CreateEnrollment on a caller-owned transaction (issue #52).
+func (r *pgRepo) CreateEnrollmentTx(ctx context.Context, q postgres.Querier, e *Enrollment) error {
+	return q.QueryRow(ctx,
 		`INSERT INTO enrollments (id, school_id, learner_id, class_group_id, academic_year_id, status, started_at)
                  VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING `+enrollmentCols,
 		e.ID, e.SchoolID, e.LearnerID, e.ClassGroupID, e.AcademicYearID, e.Status, e.StartedAt).
@@ -236,7 +257,13 @@ func (r *pgRepo) HasOpenEnrollment(ctx context.Context, schoolID, learnerID stri
 // status (optimistic concurrency: a racing writer makes the UPDATE affect 0
 // rows, which surfaces as ErrIllegalTransition).
 func (r *pgRepo) UpdateEnrollmentStatus(ctx context.Context, id string, from, to EnrollmentStatus, endedAt *time.Time) error {
-	ct, err := r.pool.Exec(ctx,
+	return r.UpdateEnrollmentStatusTx(ctx, r.pool, id, from, to, endedAt)
+}
+
+// UpdateEnrollmentStatusTx is UpdateEnrollmentStatus on a caller-owned
+// transaction so the transition and its outbox event commit atomically (issue #52).
+func (r *pgRepo) UpdateEnrollmentStatusTx(ctx context.Context, q postgres.Querier, id string, from, to EnrollmentStatus, endedAt *time.Time) error {
+	ct, err := q.Exec(ctx,
 		`UPDATE enrollments SET status = $2, ended_at = $3 WHERE id = $1 AND status = $4`,
 		id, string(to), endedAt, string(from))
 	if err != nil {

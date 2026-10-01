@@ -10,6 +10,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/postgres"
 )
 
 // Learner is the immutable identity record of a person. It carries no school
@@ -188,6 +190,9 @@ type Enrollment struct {
 type Repo interface {
 	// Learners — global identity records (no school scoping on the row).
 	CreateLearner(ctx context.Context, l *Learner) error
+	// CreateLearnerTx is CreateLearner on a caller-owned transaction so the
+	// write and its outbox event commit atomically (issue #52).
+	CreateLearnerTx(ctx context.Context, q postgres.Querier, l *Learner) error
 	LearnerByID(ctx context.Context, id string) (*Learner, error)
 	// LearnerInSchool resolves a learner ONLY when it holds an enrollment at
 	// the given school — the tenant visibility guard for cross-school reads.
@@ -199,14 +204,22 @@ type Repo interface {
 
 	// Guardians and links.
 	CreateGuardian(ctx context.Context, g *Guardian) error
+	// CreateGuardianTx is CreateGuardian on a caller-owned transaction (issue #52).
+	CreateGuardianTx(ctx context.Context, q postgres.Querier, g *Guardian) error
 	GuardianByID(ctx context.Context, id string) (*Guardian, error)
 	CreateGuardianLink(ctx context.Context, link *GuardianLink) error
+	// CreateGuardianLinkTx is CreateGuardianLink on a caller-owned transaction (issue #52).
+	CreateGuardianLinkTx(ctx context.Context, q postgres.Querier, link *GuardianLink) error
 	GuardianLinksForLearner(ctx context.Context, learnerID string) ([]*GuardianLinkView, error)
 
 	// Enrollments — always tenant-scoped by schoolID.
 	CreateEnrollment(ctx context.Context, e *Enrollment) error
+	// CreateEnrollmentTx is CreateEnrollment on a caller-owned transaction (issue #52).
+	CreateEnrollmentTx(ctx context.Context, q postgres.Querier, e *Enrollment) error
 	EnrollmentByIDInSchool(ctx context.Context, schoolID, id string) (*Enrollment, error)
 	ListEnrollments(ctx context.Context, schoolID string, status *EnrollmentStatus, limit, offset int) ([]*Enrollment, int, error)
 	HasOpenEnrollment(ctx context.Context, schoolID, learnerID string) (bool, error)
 	UpdateEnrollmentStatus(ctx context.Context, id string, from, to EnrollmentStatus, endedAt *time.Time) error
+	// UpdateEnrollmentStatusTx is UpdateEnrollmentStatus on a caller-owned transaction (issue #52).
+	UpdateEnrollmentStatusTx(ctx context.Context, q postgres.Querier, id string, from, to EnrollmentStatus, endedAt *time.Time) error
 }

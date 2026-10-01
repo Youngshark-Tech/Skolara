@@ -226,6 +226,9 @@ type Repo interface {
 
 	// Invoices.
 	InsertInvoice(ctx context.Context, inv *Invoice) error
+	// InsertInvoiceTx is InsertInvoice on a caller-owned transaction so the
+	// invoice write and its outbox event commit atomically (issue #52).
+	InsertInvoiceTx(ctx context.Context, q postgres.Querier, inv *Invoice) error
 	InvoiceByID(ctx context.Context, schoolID, id string) (*Invoice, error)
 	// InvoiceByIDForUpdate locks the invoice row (SELECT ... FOR UPDATE) for
 	// use inside the confirmation transaction — serializes concurrent
