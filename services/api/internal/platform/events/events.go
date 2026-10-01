@@ -1,19 +1,46 @@
 // Package events implements the transactional outbox pattern (ADR-003):
 // domain events are recorded in the same transaction as the state change and
 // delivered asynchronously at-least-once. Consumers must be idempotent.
+//
+// Recording: Record writes to the outbox through a Querier, which both the
+// pool and a transaction satisfy — callers pass the tx of the business write
+// so the event commits or rolls back atomically with it.
+//
+// Delivery: the Dispatcher claims unpublished rows FOR UPDATE SKIP LOCKED
+// inside one transaction, publishes, and marks published in that same
+// transaction — concurrent dispatchers never double-claim, and a crash before
+// commit yields redelivery (at-least-once), never loss. Publish failures are
+// structured-logged with the event id, bump attempts, persist last_error on
+// the row, and raise skolara_events_deadlettered_total once the retry cap is
+// exhausted. Errors are never silently swallowed.
 package events
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/observability"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+// eventsDeadLettered counts outbox events that exhausted the delivery retry
+// cap. Dead-lettered rows keep published_at NULL, carry their final failure
+// in last_error, and are excluded from further claims. Registered on the
+// default registry so /metrics exposes it next to the other skolara_* series.
+var eventsDeadLettered = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "skolara_events_deadlettered_total",
+	Help: "Outbox events that exhausted delivery attempts (dead-letter state); inspect last_error on event_outbox",
+})
+
+func init() {
+	prometheus.MustRegister(eventsDeadLettered)
+}
 
 // Envelope is the canonical event shape (master spec §41).
 type Envelope struct {
@@ -113,21 +140,40 @@ func (p LogPublisher) Publish(_ context.Context, env Envelope) error {
 	return nil
 }
 
-// Dispatcher claims unpublished events (SKIP LOCKED) and hands them to a
-// Publisher, marking them published on success. At-least-once semantics.
+// TxBeginner supplies transactions for claim-and-mark batches. Satisfied by
+// both *pgxpool.Pool and postgres.Pool (and by pgx.Tx, whose nested Begin
+// maps to savepoints).
+type TxBeginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+// Dispatcher claims unpublished events FOR UPDATE SKIP LOCKED inside one
+// transaction, hands them to a Publisher, and marks them published in that
+// same transaction. Concurrent dispatchers claim disjoint batches, so a
+// given event is published exactly once per claim; a crash between Publish
+// and commit re-delivers (at-least-once semantics; consumers idempotent).
+// Deliveries and marks commit atomically — the event is never silently lost.
 type Dispatcher struct {
-	q          Querier
+	q          TxBeginner
 	pub        Publisher
 	interval   time.Duration
 	maxRetries int
+	logf       func(format string, args ...any)
 }
 
-// NewDispatcher builds a dispatcher; poll interval defaults to 500ms.
-func NewDispatcher(q Querier, pub Publisher) *Dispatcher {
-	return &Dispatcher{q: q, pub: pub, interval: 500 * time.Millisecond, maxRetries: 20}
+// NewDispatcher builds a dispatcher; poll interval defaults to 500ms and the
+// delivery retry cap to 20 attempts.
+func NewDispatcher(q TxBeginner, pub Publisher) *Dispatcher {
+	return &Dispatcher{
+		q: q, pub: pub,
+		interval:   500 * time.Millisecond,
+		maxRetries: 20,
+		logf:       func(f string, a ...any) { log.Printf("events: "+f, a...) },
+	}
 }
 
-// Run polls until ctx is cancelled.
+// Run polls until ctx is cancelled. Batch-level errors (claim/scan/commit
+// failures) are structured-logged; the batch is retried on the next tick.
 func (d *Dispatcher) Run(ctx context.Context) {
 	t := time.NewTicker(d.interval)
 	defer t.Stop()
@@ -136,21 +182,32 @@ func (d *Dispatcher) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			_ = d.deliverBatch(ctx)
+			if err := d.deliverBatch(ctx); err != nil {
+				d.logf("dispatcher batch error: %v", err)
+			}
 		}
 	}
 }
 
-// deliverBatch claims up to 100 unpublished events and delivers them.
+// deliverBatch claims up to 100 unpublished events in one transaction — the
+// FOR UPDATE SKIP LOCKED claim keeps concurrent dispatchers off each other's
+// rows — delivers them, and marks them published in the same transaction.
 func (d *Dispatcher) deliverBatch(ctx context.Context) error {
-	rows, err := d.q.Query(ctx,
+	tx, err := d.q.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("dispatcher: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx,
 		`SELECT event_id, event_type, schema_version, school_id, aggregate_id, occurred_at, actor_id, correlation_id, payload
                  FROM event_outbox
                  WHERE published_at IS NULL AND attempts < $1
                  ORDER BY occurred_at
-                 LIMIT 100`, d.maxRetries)
+                 LIMIT 100
+                 FOR UPDATE SKIP LOCKED`, d.maxRetries)
 	if err != nil {
-		return err
+		return fmt.Errorf("dispatcher: claim: %w", err)
 	}
 	var batch []Envelope
 	for rows.Next() {
@@ -158,24 +215,43 @@ func (d *Dispatcher) deliverBatch(ctx context.Context) error {
 		if err := rows.Scan(&env.EventID, &env.Type, &env.SchemaVer, &env.SchoolID, &env.AggregateID,
 			&env.OccurredAt, &env.ActorID, &env.CorrelationID, &env.Payload); err != nil {
 			rows.Close()
-			return err
+			return fmt.Errorf("dispatcher: scan: %w", err)
 		}
 		batch = append(batch, env)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return err
+		return fmt.Errorf("dispatcher: rows: %w", err)
 	}
 
 	for _, env := range batch {
 		if err := d.pub.Publish(ctx, env); err != nil {
-			_, _ = d.q.Exec(ctx,
-				`UPDATE event_outbox SET attempts = attempts + 1, last_error = $2 WHERE event_id = $1`,
-				env.EventID, err.Error())
+			// Delivery failed: structured-log with the event id,
+			// bump attempts, and persist the error on the row — all
+			// inside the claim transaction. Once the retry cap is
+			// reached the row dead-letters: it stays unpublished,
+			// keeps last_error for inspection, and is excluded from
+			// further claims. The counter makes the stuck event
+			// observable instead of silently retried forever.
+			d.logf("dispatcher publish failed event_id=%s type=%s: %v", env.EventID, env.Type, err)
+			var attempts int
+			if aerr := tx.QueryRow(ctx,
+				`UPDATE event_outbox SET attempts = attempts + 1, last_error = $2 WHERE event_id = $1 RETURNING attempts`,
+				env.EventID, err.Error()).Scan(&attempts); aerr != nil {
+				return fmt.Errorf("dispatcher: record failure for %s: %w", env.EventID, aerr)
+			}
+			if attempts >= d.maxRetries {
+				eventsDeadLettered.Inc()
+				d.logf("dispatcher dead-lettered event_id=%s type=%s attempts=%d last_error=%q",
+					env.EventID, env.Type, attempts, err.Error())
+			}
 			continue
 		}
-		_, _ = d.q.Exec(ctx, `UPDATE event_outbox SET published_at = now() WHERE event_id = $1`, env.EventID)
+		if _, uerr := tx.Exec(ctx,
+			`UPDATE event_outbox SET published_at = now() WHERE event_id = $1`, env.EventID); uerr != nil {
+			return fmt.Errorf("dispatcher: mark published %s: %w", env.EventID, uerr)
+		}
 		observability.IncEventsPublished()
 	}
-	return nil
+	return tx.Commit(ctx)
 }
