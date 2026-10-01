@@ -7,10 +7,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -32,9 +34,13 @@ import (
 )
 
 func main() {
-	healthcheckOnly := flag.Bool("healthcheck", false, "exit 0 (container health probe)")
+	healthcheckOnly := flag.Bool("healthcheck", false, "probe the local /healthz endpoint and exit with its status (container health check)")
 	flag.Parse()
 	if *healthcheckOnly {
+		if err := runHealthcheck(); err != nil {
+			fmt.Fprintln(os.Stderr, "healthcheck failed:", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
@@ -42,6 +48,49 @@ func main() {
 		fmt.Fprintln(os.Stderr, "fatal:", err)
 		os.Exit(1)
 	}
+}
+
+// runHealthcheck backs the Docker HEALTHCHECK (issue #59). It resolves the
+// bind address from the same config the server uses (SKOLARA_HTTP_ADDR,
+// default ":8080") and issues a cheap GET /healthz against the local
+// listener: no migrations, no auth, no DB work of its own. A config load
+// failure is itself an unhealthy signal — the server could not have booted
+// with an invalid configuration.
+func runHealthcheck() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	return probeHealthz(healthcheckTarget(cfg.HTTPAddr), 2*time.Second)
+}
+
+// healthcheckTarget maps the server bind address to the loopback URL the
+// in-container probe should hit. ":8080" and "0.0.0.0:8080" both mean "all
+// interfaces", which includes 127.0.0.1; any other host is kept as configured.
+func healthcheckTarget(addr string) string {
+	if strings.HasPrefix(addr, ":") {
+		return "http://127.0.0.1" + addr + "/healthz"
+	}
+	if port, ok := strings.CutPrefix(addr, "0.0.0.0:"); ok {
+		return "http://127.0.0.1:" + port + "/healthz"
+	}
+	return "http://" + addr + "/healthz"
+}
+
+// probeHealthz GETs the given URL and requires HTTP 200 within timeout.
+// Any non-200 status, transport error, or timeout is reported as unhealthy.
+func probeHealthz(url string, timeout time.Duration) error {
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("probe %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("probe %s: HTTP %d, want 200", url, resp.StatusCode)
+	}
+	return nil
 }
 
 func run() error {
