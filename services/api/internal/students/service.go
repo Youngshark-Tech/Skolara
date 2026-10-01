@@ -67,7 +67,9 @@ type EnrollmentInput struct {
 }
 
 // CreateLearner provisions a global (non-tenant) learner identity and emits
-// students.LearnerCreated v1 scoped to the acting school.
+// students.LearnerCreated v1 scoped to the acting school. The acting school is
+// also recorded as the learner's origin (issue #99) so it can see the record
+// before the first enrollment; an empty schoolID leaves the origin NULL.
 func (s *Service) CreateLearner(ctx context.Context, schoolID string, in LearnerInput) (*Learner, error) {
 	first := strings.TrimSpace(in.FirstName)
 	last := strings.TrimSpace(in.LastName)
@@ -82,13 +84,14 @@ func (s *Service) CreateLearner(ctx context.Context, schoolID string, in Learner
 		return nil, fmt.Errorf("%w: date of birth must be in the past", ErrValidation)
 	}
 	l := &Learner{
-		ID:          uuid.NewString(),
-		FirstName:   first,
-		LastName:    last,
-		MiddleName:  optionalText(middle),
-		DateOfBirth: in.DateOfBirth,
-		Gender:      strings.TrimSpace(in.Gender),
-		ExternalID:  optionalText(strings.TrimSpace(in.ExternalID)),
+		ID:             uuid.NewString(),
+		FirstName:      first,
+		LastName:       last,
+		MiddleName:     optionalText(middle),
+		DateOfBirth:    in.DateOfBirth,
+		Gender:         strings.TrimSpace(in.Gender),
+		ExternalID:     optionalText(strings.TrimSpace(in.ExternalID)),
+		OriginSchoolID: schoolID, // provenance from the tenancy context (issue #99); "" → NULL
 	}
 	if err := s.pool.WithinTx(ctx, func(tx postgres.Querier) error {
 		if err := s.repo.CreateLearnerTx(ctx, tx, l); err != nil {
@@ -107,13 +110,13 @@ func (s *Service) CreateLearner(ctx context.Context, schoolID string, in Learner
 }
 
 // LearnerByID resolves a learner for a school context — 404-semantics unless
-// the learner holds an enrollment at that school.
+// the school can see it: an enrollment there or the school created it (issue #99).
 func (s *Service) LearnerByID(ctx context.Context, schoolID, learnerID string) (*Learner, error) {
 	return s.repo.LearnerInSchool(ctx, schoolID, learnerID)
 }
 
-// ListLearners lists learners enrolled at the school, optionally filtered by
-// a name substring.
+// ListLearners lists learners visible to the school (enrolled there or created
+// by it, issue #99), optionally filtered by a name substring.
 func (s *Service) ListLearners(ctx context.Context, schoolID, query string, limit, offset int) ([]*Learner, int, error) {
 	return s.repo.ListLearners(ctx, schoolID, strings.TrimSpace(query), limit, offset)
 }
@@ -152,7 +155,8 @@ func (s *Service) CreateGuardian(ctx context.Context, schoolID string, in Guardi
 
 // LinkGuardian binds an existing guardian to a learner with relationship and
 // access flags, and emits students.GuardianLinked v1. The learner must be
-// enrolled at the acting school (tenant guard) and both records must exist.
+// visible to the acting school — enrolled there or created by it (issue #99,
+// so guardians can be bound pre-enrollment) — and both records must exist.
 func (s *Service) LinkGuardian(ctx context.Context, schoolID, learnerID string, in LinkInput) (*GuardianLink, error) {
 	if in.GuardianID == "" {
 		return nil, fmt.Errorf("%w: guardianId required", ErrValidation)

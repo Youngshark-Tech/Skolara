@@ -48,12 +48,18 @@ func (r *pgRepo) CreateLearner(ctx context.Context, l *Learner) error {
 }
 
 // CreateLearnerTx is CreateLearner on a caller-owned transaction so the
-// insert and its outbox event commit atomically (issue #52).
+// insert and its outbox event commit atomically (issue #52). The acting
+// school is persisted as origin_school_id (issue #99); "" maps to NULL so
+// records created without a tenancy context stay invisible until enrolled.
 func (r *pgRepo) CreateLearnerTx(ctx context.Context, q postgres.Querier, l *Learner) error {
+	var originSchool any // "" → NULL (column is nullable for backfill safety)
+	if l.OriginSchoolID != "" {
+		originSchool = l.OriginSchoolID
+	}
 	return q.QueryRow(ctx,
-		`INSERT INTO learners (id, first_name, last_name, middle_name, date_of_birth, gender, external_id)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING `+learnerCols,
-		l.ID, l.FirstName, l.LastName, l.MiddleName, l.DateOfBirth, l.Gender, l.ExternalID).
+		`INSERT INTO learners (id, first_name, last_name, middle_name, date_of_birth, gender, external_id, origin_school_id)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING `+learnerCols,
+		l.ID, l.FirstName, l.LastName, l.MiddleName, l.DateOfBirth, l.Gender, l.ExternalID, originSchool).
 		Scan(&l.ID, &l.FirstName, &l.LastName, &l.MiddleName, &l.DateOfBirth, &l.Gender, &l.ExternalID, &l.CreatedAt)
 }
 
@@ -61,32 +67,39 @@ func (r *pgRepo) LearnerByID(ctx context.Context, id string) (*Learner, error) {
 	return scanLearner(r.pool.QueryRow(ctx, `SELECT `+learnerCols+` FROM learners WHERE id = $1`, id))
 }
 
-// LearnerInSchool resolves a learner only through an enrollment at the school
-// — the tenant visibility boundary for learner records.
+// learnerVisibleToSchool is the tenant visibility predicate (issue #99): the
+// school sees a learner when it holds an enrollment there OR the school
+// provisioned the record (origin_school_id). EXISTS keeps multi-enrollment
+// learners from fanning out rows without needing DISTINCT.
+const learnerVisibleToSchool = `(
+        l.origin_school_id = $1
+        OR EXISTS (SELECT 1 FROM enrollments e WHERE e.learner_id = l.id AND e.school_id = $1)
+)`
+
+// LearnerInSchool resolves a learner only through tenant visibility — an
+// enrollment at the school or origin at the school (issue #99).
 func (r *pgRepo) LearnerInSchool(ctx context.Context, schoolID, learnerID string) (*Learner, error) {
 	return scanLearner(r.pool.QueryRow(ctx,
 		`SELECT `+prefixedCols("l", learnerCols)+` FROM learners l
-                 JOIN enrollments e ON e.learner_id = l.id
-                 WHERE l.id = $1 AND e.school_id = $2
-                 LIMIT 1`, learnerID, schoolID))
+                 WHERE l.id = $2 AND `+learnerVisibleToSchool+`
+                 LIMIT 1`, schoolID, learnerID))
 }
 
-// ListLearners lists (and optionally name-searches) learners enrolled at a
-// school. Learners are global; the school join is what scopes the listing.
+// ListLearners lists (and optionally name-searches) learners visible to a
+// school: enrolled there or created by it (issue #99). Learners are global;
+// the visibility predicate is what scopes the listing.
 func (r *pgRepo) ListLearners(ctx context.Context, schoolID, query string, limit, offset int) ([]*Learner, int, error) {
 	var total int
 	if err := r.pool.QueryRow(ctx,
-		`SELECT count(DISTINCT l.id) FROM learners l
-                 JOIN enrollments e ON e.learner_id = l.id
-                 WHERE e.school_id = $1
+		`SELECT count(*) FROM learners l
+                 WHERE `+learnerVisibleToSchool+`
                    AND ($2::text = '' OR l.first_name ILIKE '%'||$2||'%' OR l.last_name ILIKE '%'||$2||'%')`,
 		schoolID, query).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	rows, err := r.pool.Query(ctx,
-		`SELECT DISTINCT `+prefixedCols("l", learnerCols)+` FROM learners l
-                 JOIN enrollments e ON e.learner_id = l.id
-                 WHERE e.school_id = $1
+		`SELECT `+prefixedCols("l", learnerCols)+` FROM learners l
+                 WHERE `+learnerVisibleToSchool+`
                    AND ($2::text = '' OR l.first_name ILIKE '%'||$2||'%' OR l.last_name ILIKE '%'||$2||'%')
                  ORDER BY l.last_name, l.first_name
                  LIMIT $3 OFFSET $4`, schoolID, query, limit, offset)
