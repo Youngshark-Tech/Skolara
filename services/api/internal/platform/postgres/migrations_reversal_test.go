@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,6 +44,15 @@ var keyTables = []string{
 	"event_outbox", "idempotency_keys",
 }
 
+// identityTables are created by migration 2 (20260909000002_identity) and
+// dropped by its down-migration — used to prove the schema actually changed
+// when MigrateDown steps back one migration (issue #100).
+var identityTables = []string{"users", "refresh_tokens", "audit_logs"}
+
+// platformTables are created by migration 1 (20260909000001_platform) and must
+// still exist once only that migration is applied.
+var platformTables = []string{"event_outbox", "idempotency_keys"}
+
 // TestMigrationsUpAndDownAll proves the whole migration set is REVERSIBLE on a
 // scratch database: up all (done by testdb.New) -> down all -> up all again,
 // then asserts the key tables exist after the final up and that schema_migrations
@@ -51,10 +62,11 @@ func TestMigrationsUpAndDownAll(t *testing.T) {
 	ctx := context.Background()
 	url := pool.Config().ConnString()
 
-	// Phase 2: roll the schema all the way back. MigrateDown(url, dir, -1)
-	// cannot be used for this (negative n means Up in postgres.runMigrateFS),
-	// so drive golang-migrate's Down() directly over the embedded FS.
-	if err := withMigrator(url, func(m *migrate.Migrate) error { return m.Down() }); err != nil {
+	// Phase 2: roll the schema all the way back through the exported helper.
+	// (Issue #100: MigrateDown(url, dir, n<0) used to run UP — the fix makes
+	// negative n a true down-all, so this test now drives the helper instead
+	// of bypassing it with golang-migrate's Down().)
+	if err := postgres.MigrateDown(url, materializeMigrations(t), -1); err != nil {
 		t.Fatalf("down all: %v", err)
 	}
 	for _, table := range keyTables {
@@ -75,14 +87,84 @@ func TestMigrationsUpAndDownAll(t *testing.T) {
 			t.Errorf("table %s missing after final up-all", table)
 		}
 	}
-	want := latestMigrationVersion(t)
-	var got uint64
-	if err := pool.QueryRow(ctx, `SELECT version FROM schema_migrations`).Scan(&got); err != nil {
-		t.Fatalf("read schema_migrations version: %v", err)
+	assertVersion(t, pool, ctx, latestMigrationVersion(t))
+}
+
+// TestMigrateDownStepsBackOne is the issue #100 regression test. From a clean
+// database: apply exactly two migrations, then MigrateDown(url, dir, 1) must
+// leave the schema at the PREVIOUS version with the second migration's tables
+// dropped — not silently migrate up again, as the old sign-overloaded helper
+// did. It also proves negative n is a true down-all now, and that a down on a
+// clean database is the documented no-op.
+func TestMigrateDownStepsBackOne(t *testing.T) {
+	pool := testdb.New(t) // fresh scratch DB, all up-migrations applied
+	ctx := context.Background()
+	url := pool.Config().ConnString()
+	dir := materializeMigrations(t) // exercises the os.DirFS path MigrateDown uses
+
+	// Start clean: roll back everything testdb.New applied (down-all on a
+	// fully migrated database — also proves the negative-n fix end to end).
+	if err := postgres.MigrateDown(url, dir, -1); err != nil {
+		t.Fatalf("down all on fresh scratch DB: %v", err)
 	}
-	if got != want {
-		t.Errorf("schema_migrations version after final up = %d, want %d", got, want)
+	assertClean(t, pool, ctx)
+
+	// Up exactly 2 (no exported up-N helper; drive golang-migrate directly).
+	if err := withMigrator(url, func(m *migrate.Migrate) error { return m.Steps(2) }); err != nil {
+		t.Fatalf("up 2: %v", err)
 	}
+	versions := migrationVersions(t) // ascending
+	// After up 2 the version is the SECOND migration in the set; after the
+	// fix under test steps down one, it must be the FIRST.
+	assertVersion(t, pool, ctx, versions[1])
+	for _, table := range platformTables {
+		if !tableExists(t, pool, table) {
+			t.Errorf("table %s missing after up 2", table)
+		}
+	}
+
+	// The fix under test: exactly one step DOWN.
+	if err := postgres.MigrateDown(url, dir, 1); err != nil {
+		t.Fatalf("MigrateDown(url, dir, 1): %v", err)
+	}
+	assertVersion(t, pool, ctx, versions[0])
+	// The schema reflects it: migration 2's tables are gone, migration 1's remain.
+	for _, table := range identityTables {
+		if tableExists(t, pool, table) {
+			t.Errorf("table %s still exists after down 1 (migration 2 not rolled back)", table)
+		}
+	}
+	for _, table := range platformTables {
+		if !tableExists(t, pool, table) {
+			t.Errorf("table %s missing after down 1 (migration 1 should remain)", table)
+		}
+	}
+
+	// Over-count: down 99 with one migration applied rolls back everything
+	// without error (golang-migrate reports ErrShortLimit for the shortfall;
+	// landing at the bottom satisfies the request, so the helper caps it).
+	if err := postgres.MigrateDown(url, dir, 99); err != nil {
+		t.Fatalf("MigrateDown(url, dir, 99) over-count: %v", err)
+	}
+	assertClean(t, pool, ctx)
+
+	// Documented no-op: down past the last applied migration changes nothing
+	// and must not error (this is the "second down on a clean database" case).
+	if err := postgres.MigrateDown(url, dir, 1); err != nil {
+		t.Fatalf("MigrateDown(url, dir, 1) on clean DB: %v", err)
+	}
+	assertClean(t, pool, ctx)
+	if err := postgres.MigrateDown(url, dir, -1); err != nil {
+		t.Fatalf("MigrateDown(url, dir, -1) on clean DB: %v", err)
+	}
+	assertClean(t, pool, ctx)
+
+	// Sanity: the same scratch DB still migrates UP cleanly through the
+	// exported helper (MigrateUp must not have been disturbed by the fix).
+	if err := postgres.MigrateUp(url, dir); err != nil {
+		t.Fatalf("MigrateUp after down-all: %v", err)
+	}
+	assertVersion(t, pool, ctx, versions[len(versions)-1])
 }
 
 func tableExists(t *testing.T, pool *postgres.Pool, table string) bool {
@@ -94,6 +176,32 @@ func tableExists(t *testing.T, pool *postgres.Pool, table string) bool {
 		t.Fatalf("probe table %s: %v", table, err)
 	}
 	return exists
+}
+
+// assertVersion checks schema_migrations points at exactly the wanted version.
+func assertVersion(t *testing.T, pool *postgres.Pool, ctx context.Context, want uint64) {
+	t.Helper()
+	var got uint64
+	if err := pool.QueryRow(ctx, `SELECT version FROM schema_migrations`).Scan(&got); err != nil {
+		t.Fatalf("read schema_migrations version: %v", err)
+	}
+	if got != want {
+		t.Errorf("schema_migrations version = %d, want %d", got, want)
+	}
+}
+
+// assertClean checks the database is fully rolled back: schema_migrations
+// still exists (golang-migrate TRUNCATEs it at the nil version) but holds no
+// applied version.
+func assertClean(t *testing.T, pool *postgres.Pool, ctx context.Context) {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
+		t.Fatalf("read schema_migrations on clean DB: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("schema_migrations holds %d rows after full down, want 0", n)
+	}
 }
 
 // withMigrator builds a golang-migrate instance over the embedded migrations FS
@@ -116,9 +224,31 @@ func withMigrator(databaseURL string, fn func(m *migrate.Migrate) error) error {
 	return err
 }
 
-// latestMigrationVersion parses the highest numeric prefix from the embedded
-// *.up.sql files (e.g. 20260909000012), so the assertion never hardcodes a count.
-func latestMigrationVersion(t *testing.T) uint64 {
+// materializeMigrations writes the embedded migration files into a temp
+// directory and returns it, so tests can exercise the on-disk os.DirFS path
+// the MigrateUp/MigrateDown helpers use.
+func materializeMigrations(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	entries, err := fs.ReadDir(migrations.FS, ".")
+	if err != nil {
+		t.Fatalf("read embedded migrations: %v", err)
+	}
+	for _, e := range entries {
+		body, err := fs.ReadFile(migrations.FS, e.Name())
+		if err != nil {
+			t.Fatalf("read embedded %s: %v", e.Name(), err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, e.Name()), body, 0o644); err != nil {
+			t.Fatalf("write %s: %v", e.Name(), err)
+		}
+	}
+	return dir
+}
+
+// migrationVersions parses the numeric prefixes of the embedded *.up.sql files
+// (e.g. 20260909000012) in ascending order, so assertions never hardcode a count.
+func migrationVersions(t *testing.T) []uint64 {
 	t.Helper()
 	entries, err := fs.ReadDir(migrations.FS, ".")
 	if err != nil {
@@ -140,5 +270,11 @@ func latestMigrationVersion(t *testing.T) uint64 {
 		t.Fatal("no *.up.sql files in embedded migrations FS")
 	}
 	sort.Slice(versions, func(i, j int) bool { return versions[i] < versions[j] })
+	return versions
+}
+
+func latestMigrationVersion(t *testing.T) uint64 {
+	t.Helper()
+	versions := migrationVersions(t)
 	return versions[len(versions)-1]
 }

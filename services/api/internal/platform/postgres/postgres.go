@@ -87,21 +87,40 @@ func RedactedURL(databaseURL string) string {
 	return u.String()
 }
 
+// migrateDirection selects which way runMigrateFS drives the schema. The
+// exported helpers map onto it explicitly so the direction is never inferred
+// from the sign of a step count (issue #100: MigrateDown(url, dir, n<0) used
+// to run Up because runMigrateFS overloaded the sign of n).
+type migrateDirection int
+
+const (
+	migrateUp migrateDirection = iota
+	migrateDown
+)
+
 // MigrateUp applies all pending migrations from a local directory.
-func MigrateUp(databaseURL, dir string) error { return runMigrate(databaseURL, dir, -1) }
+func MigrateUp(databaseURL, dir string) error {
+	return runMigrate(databaseURL, dir, migrateUp, 0)
+}
 
 // MigrateUpFS applies all pending migrations from an in-memory filesystem
 // (e.g. go:embed).
-func MigrateUpFS(databaseURL string, fsys fs.FS) error { return runMigrateFS(databaseURL, fsys, -1) }
-
-// MigrateDown rolls back n migrations (all if n < 0).
-func MigrateDown(databaseURL, dir string, n int) error { return runMigrate(databaseURL, dir, n) }
-
-func runMigrate(databaseURL, dir string, n int) error {
-	return runMigrateFS(databaseURL, os.DirFS(dir), n)
+func MigrateUpFS(databaseURL string, fsys fs.FS) error {
+	return runMigrateFS(databaseURL, fsys, migrateUp, 0)
 }
 
-func runMigrateFS(databaseURL string, fsys fs.FS, n int) error {
+// MigrateDown rolls back n migrations (all if n < 0, or capped at the number
+// applied when n exceeds it). Rolling back on a database with no applied
+// migrations is a no-op, as is n == 0.
+func MigrateDown(databaseURL, dir string, n int) error {
+	return runMigrate(databaseURL, dir, migrateDown, n)
+}
+
+func runMigrate(databaseURL, dir string, direction migrateDirection, n int) error {
+	return runMigrateFS(databaseURL, os.DirFS(dir), direction, n)
+}
+
+func runMigrateFS(databaseURL string, fsys fs.FS, direction migrateDirection, n int) error {
 	src, err := iofs.New(fsys, ".")
 	if err != nil {
 		return fmt.Errorf("migrate: source: %w", err)
@@ -111,14 +130,44 @@ func runMigrateFS(databaseURL string, fsys fs.FS, n int) error {
 		return fmt.Errorf("migrate: init: %w", err)
 	}
 	defer m.Close()
-	if n < 0 {
+
+	switch direction {
+	case migrateUp:
 		if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 			return fmt.Errorf("migrate: up: %w", err)
 		}
-		return nil
-	}
-	if err := m.Steps(-n); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		return fmt.Errorf("migrate: down: %w", err)
+	case migrateDown:
+		// Steps DOWN unconditionally (issue #100): n > 0 rolls back exactly
+		// n migrations, n < 0 rolls back every applied migration, and n == 0
+		// is a no-op. Down past the first migration (clean database) is the
+		// documented no-op too: golang-migrate reports os.ErrNotExist for
+		// Steps(-n) from the nil version, so the current version is checked
+		// up-front instead of pattern-matching on that error.
+		if n == 0 {
+			return nil
+		}
+		if _, _, verr := m.Version(); verr != nil {
+			if errors.Is(verr, migrate.ErrNilVersion) {
+				return nil // nothing applied — documented no-op
+			}
+			return fmt.Errorf("migrate: version: %w", verr)
+		}
+		var err error
+		if n < 0 {
+			err = m.Down()
+		} else {
+			err = m.Steps(-n)
+		}
+		// ErrShortLimit: golang-migrate applies every down it can and then
+		// reports the shortfall. Landing at the bottom of the applied set
+		// satisfies a down-N request, so the shortfall is not a failure (the
+		// nothing-applied case is handled by the ErrNilVersion pre-check).
+		var short migrate.ErrShortLimit
+		if err != nil && !errors.Is(err, migrate.ErrNoChange) && !errors.As(err, &short) {
+			return fmt.Errorf("migrate: down: %w", err)
+		}
+	default:
+		return fmt.Errorf("migrate: unknown direction %d", int(direction))
 	}
 	return nil
 }
