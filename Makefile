@@ -1,13 +1,26 @@
 # Skolara — repository-level orchestration
-.PHONY: help api-build api-test api-test-integration api-run web-install web-dev web-build web-lint web-typecheck web-test migrate-up migrate-down compose-up compose-down
+.PHONY: help api-build api-test api-test-integration api-run run web-install web-dev web-build web-lint web-typecheck web-test migrate-up migrate-down compose-up compose-down contracts-generate contracts-check
+
+# Dev targets load ./.env (repo root) when present, so the documented quickstart
+# works from a clean shell (`make migrate-up`, `make run`, ...). Guarded include:
+# no .env file -> no-op. Keys are exported to recipe environments (go run, npm,
+# docker compose). Values are make-expanded: '$' inside a value must be written
+# '$$'. .env is git-ignored and must never hold production secrets.
+ifneq (,$(wildcard .env))
+include .env
+export
+endif
 
 help: ## Show targets
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}'
+        @grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}'
 
 api-build: ; cd services/api && go build ./...
 api-test: ; cd services/api && go test -race ./...
 api-test-integration: ; cd services/api && TEST_DATABASE_URL="$${TEST_DATABASE_URL}" go test -race -tags=integration ./...
 api-run: ; cd services/api && go run ./cmd/api
+
+# Documented quickstart alias (CONTRIBUTING quickstart uses `make run`).
+run: api-run
 
 web-install: ; cd apps/web && npm ci
 web-dev: ; cd apps/web && npm run dev

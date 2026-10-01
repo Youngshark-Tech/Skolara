@@ -1,6 +1,6 @@
 # Skolara API — multi-stage build
-# Build context: repository root
-#   docker build -f services/api/Dockerfile services/api
+# Build context: repository root (matches infrastructure/docker-compose.yml)
+#   docker build -f services/api/Dockerfile .
 
 # golang:1.25.13-alpine matches the toolchain directive in go.mod (issue #101):
 # pinning the PATCH keeps image builds reproducible.

@@ -28,3 +28,14 @@ Multi-tenancy is foundational (§16): Education Group → School → Campus → 
 
 - Postgres RLS from day one: stronger but heavier to operate with connection pooling and test complexity; chosen as hardening step once posture is stable.
 - Schema-per-tenant: rejected — migration explosion across hundreds of schools.
+
+## Amendment (2026-10) — active-school resolution
+
+The original wording above (layer 1: "a JWT carries the *active school context*"; layer 2: middleware "extracts the active school from the verified token (never from client-controlled body/headers)") was **inaccurate** and is corrected here (docs audit, issue #64). The implemented resolution (see `services/api/internal/tenancy/http.go` and `internal/tenancy/service.go`):
+
+- The client selects the desired school per request via the **`X-School-ID` header**.
+- The server **validates that header against the caller's ACTIVE `school_memberships`** before honoring it; a school the caller does not belong to (or an inactive membership) is rejected, and requests without any resolvable school context cannot reach tenant-scoped repositories.
+- The header value is therefore **never trusted directly** — the membership lookup is the source of truth. The original claim that school context comes "from the verified token" was wrong; what the token certifies is the *user identity* whose memberships are checked.
+- Failure semantics are unchanged: foreign-tenant resources still return **404**, and the isolation-matrix test remains part of the QA gate.
+
+`docs/security/THREAT_MODEL.md` already described the header-based resolution correctly; it is the reference description.

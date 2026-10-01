@@ -20,18 +20,26 @@ implementations, fake APIs, disabled tests, or known broken builds are rejected.
 
 ## Local Development
 
+All dev targets live in the root `Makefile` — run them **from the repository root**.
+The Makefile automatically loads `./.env` when present and exports every key to the
+recipe commands, so the commands below work verbatim from a clean shell. To use the
+same values in a manual shell (or inside `services/api/`, which has its own Makefile
+without `.env` loading): `set -a; . ./.env; set +a`.
+
 ### Backend (services/api)
 
 Requires Go 1.25+ (matches `services/api/go.mod`), PostgreSQL 17, and Docker (or a local Postgres).
 
 ```bash
-cd services/api
-cp .env.example .env                 # configure DATABASE_URL, JWT_SECRET, etc.
-make migrate-up                      # apply database migrations
-make run                             # start API on :8080
-make test                            # unit tests (no DB required)
-DATABASE_URL=postgres://... make test-integration   # integration tests
+cp services/api/.env.example .env    # at repo root; then edit DATABASE_URL, secrets, etc.
+make migrate-up                      # apply database migrations (DATABASE_URL comes from ./.env)
+make run                             # start API on :8080 (self-applies migrations first)
+make api-test                        # unit tests (no DB required)
+DATABASE_URL=postgres://... make api-test-integration   # integration tests (or export TEST_DATABASE_URL)
 ```
+
+`.env` is git-ignored; the committed example values are dev-only placeholders and
+must be replaced before anything beyond local development.
 
 ### Frontend (apps/web)
 

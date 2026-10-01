@@ -1,6 +1,6 @@
 # Skolara Web — multi-stage build
-# Build context: repository root
-#   docker build -f apps/web/Dockerfile apps/web
+# Build context: repository root (matches infrastructure/docker-compose.yml)
+#   docker build -f apps/web/Dockerfile . --build-arg NEXT_PUBLIC_API_URL=http://localhost:8080
 #
 # NEXT_PUBLIC_API_URL is REQUIRED: Next.js inlines NEXT_PUBLIC_* variables into
 # the client bundle at build time, so an unset value would ship a bundle

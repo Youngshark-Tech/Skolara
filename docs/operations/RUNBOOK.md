@@ -11,7 +11,7 @@ Operational guidance for running Skolara in production-like environments.
 [Reverse proxy / load balancer]   ← TLS termination, HSTS, /metrics ACL
       │ HTTP (private network)
       ▼
-[skolara-api]  ──►  [PostgreSQL 16]   (source of truth)
+[skolara-api]  ──►  [PostgreSQL 17]   (source of truth)
       │                    ▲
       └── migrations (embedded, applied at boot)
 ```
@@ -29,12 +29,19 @@ Operational guidance for running Skolara in production-like environments.
 | `SKOLARA_WEBHOOK_SECRET` | yes | ≥ 32 bytes; shared with the payment provider signer |
 | `SKOLARA_CORS_ORIGINS` | yes | exact web origins, comma separated |
 | `SKOLARA_HTTP_ADDR` | no | default `:8080` |
+| `SKOLARA_HTTP_TIMEOUT` | no | request timeout, default `30s` |
+| `SKOLARA_SHUTDOWN_PERIOD` | no | graceful drain window, default `15s` |
 | `SKOLARA_LOG_LEVEL` / `SKOLARA_LOG_FORMAT` | no | `info` / `json` in prod |
-| `SKOLARA_RATE_LIMIT_RPS` / `SKOLARA_RATE_LIMIT_BURST` | no | per-IP token bucket |
+| `SKOLARA_ACCESS_TOKEN_EXPIRY` | no | default `15m` (short-lived by design) |
+| `SKOLARA_REFRESH_TOKEN_EXPIRY` | no | default `720h` (30 days, rotating) |
+| `SKOLARA_RATE_LIMIT_RPS` / `SKOLARA_RATE_LIMIT_BURST` | no | per-IP token bucket (evicts idle buckets; see #52) |
 | `SKOLARA_MAX_BODY_BYTES` | no | default 1 MiB |
+| `SKOLARA_REDIS_ADDR` | no | **reserved, currently unused by the API** — compose keeps the service for the shared rate limiter on the roadmap |
 | `SKOLARA_BOOTSTRAP_ADMIN_EMAIL` / `_PASSWORD` | first boot only | create the first platform admin; disable afterwards |
 
-**Production refuses to boot** without a strong JWT/webhook secret and real CORS origins.
+Migrations are **embedded in the API binary** — there is no runtime migrations-directory override. The standalone `services/api/cmd/migrate` tool accepts `SKOLARA_MIGRATIONS_DIR` (default `./migrations`) for manual operation only.
+
+**Production refuses to boot** without a strong JWT secret, a webhook secret ≥ 32 bytes, and real CORS origins.
 
 ## 3. Deployments & migrations
 
@@ -51,9 +58,45 @@ Operational guidance for running Skolara in production-like environments.
 | `GET /readyz` | DB reachable (2s timeout) | remove from LB on fail |
 | `GET /metrics` | Prometheus | see below |
 
-Suggested alerts: 5xx rate > 1% (5m); p99 `skolara_http_request_duration_seconds` > 1s; `readyz` flapping; outbox `attempts` growing (delivery degraded); Postgres connections ≥ 80% of pool (20).
+Minimum alert set (Prometheus rules example — paste into your rules file and tune thresholds per environment):
 
-`/metrics` must NOT be publicly reachable — restrict at the proxy (allow internal networks only).
+```yaml
+groups:
+  - name: skolara
+    rules:
+      - alert: SkolaraAPIDown
+        expr: up{job="skolara-api"} == 0
+        for: 1m
+      - alert: SkolaraReadinessFailing
+        expr: probe_success{job="skolara-readyz"} == 0
+        for: 2m
+      - alert: SkolaraHigh5xx
+        expr: sum(rate(skolara_http_requests_total{code=~"5.."}[5m]))
+              / sum(rate(skolara_http_requests_total[5m])) > 0.01
+        for: 5m
+      - alert: SkolaraSlowRequests
+        expr: histogram_quantile(0.99, sum(rate(skolara_http_request_duration_seconds_bucket[5m])) by (le)) > 1
+        for: 5m
+      - alert: SkolaraOutboxDeadLetters
+        expr: increase(skolara_events_deadlettered_total[15m]) > 0
+      - alert: SkolaraOutboxBacklog
+        expr: skolara_outbox_unpublished > 100   # or publisher-side equivalent gauge
+        for: 10m
+      - alert: SkolaraPGPoolSaturation
+        expr: pg_stat_activity_count / pg_settings_max_connections > 0.8
+        for: 5m
+```
+
+`/metrics` must NOT be publicly reachable — restrict at the proxy. nginx example (allow the private CIDR only):
+
+```nginx
+location = /metrics {
+    allow 10.0.0.0/8;      # private network(s) that run monitoring
+    allow 127.0.0.1;
+    deny all;
+    proxy_pass http://skolara-api:8080;
+}
+```
 
 ## 5. Logs
 
@@ -87,6 +130,17 @@ Account compromise: `PATCH /api/v1/users/{id}/status {"status":"disabled"}` — 
 5. Verify: admin signs in, switches school (web shell), creates a learner, records attendance, issues an invoice
 6. Finance chart seeds itself lazily on first financial operation (`wallet` GET or first posting)
 
-## 9. Local development
+## 9. Local development & developer tools
 
-See [CONTRIBUTING](../../CONTRIBUTING.md). Compose stack: `docker compose -f infrastructure/docker-compose.yml up --build`. Live E2E smoke: `scripts/e2e-smoke.sh` (26 checks over real HTTP).
+See [CONTRIBUTING](../../CONTRIBUTING.md). Compose stack: `docker compose -f infrastructure/docker-compose.yml up --build`.
+
+**E2E smoke prerequisites** (the script logs in as the bootstrap admin and signs webhooks): start the API with `SKOLARA_BOOTSTRAP_ADMIN_EMAIL=admin@skolara.test`, a matching `SKOLARA_BOOTSTRAP_ADMIN_PASSWORD` (script default `S0pera!Admin2026`), and `SKOLARA_WEBHOOK_SECRET=dev-webhook-secret-0123456789abcdef` — the compose api service ships these dev defaults (override via `.env`). Then `scripts/e2e-smoke.sh [BASE_URL]` (26 checks over real HTTP). Requires `python3` on PATH (JSON parsing + HMAC signature).
+
+**Developer tools**: `services/api/cmd/dbq` is a raw-SQL debug utility (admin/roles/membership counts for `admin@skolara.test`). It executes arbitrary SQL against the `DATABASE_URL` you pass — dev/debug use only, never in the production path. The `services/api/cmd/migrate` tool applies/rolls back migrations manually (`up`, `down [N]`; exit 0 includes documented no-ops, 1 real failure, 2 usage error).
+
+## 10. Hosting topologies
+
+The repository carries a multi-service `vercel.json` (web + api). Two supported shapes:
+
+- **Co-located** (same site, e.g. reverse-proxied `app.example.com` → web, `app.example.com/api` → api): refresh cookies work with `SameSite=Lax`; this is the default contract.
+- **Split-domain** (web on `app.example.com`, API on `api.example.com`): cross-site `fetch` will NOT send Lax cookies — silent refresh breaks. This requires `SameSite=None; Secure` on the refresh cookie (with the CSRF review in `docs/security/THREAT_MODEL.md`) or a same-site topology. The decision is tracked in issue #83 — do NOT deploy split-domain until it lands. `NEXT_PUBLIC_API_URL` must be set in the **web build** environment (it is inlined into the client bundle at build time; see `apps/web/.env.example`).

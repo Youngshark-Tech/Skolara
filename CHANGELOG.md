@@ -2,6 +2,24 @@
 
 All notable changes to Skolara are documented here. Format based on Keep a Changelog.
 
+## [1.0.0-beta] — 2026-10-01
+
+Audit round 3 — full-system audit execution wave (25 issues closed via reviewed PRs #65–#105).
+
+### Added
+- Web: enrollment lifecycle UI (9-state admit story), middleware route guard, CSP/HSTS/frame/referrer/permissions headers, mobile-responsive shell, error/loading/not-found boundaries, favicon + per-page metadata, accessible forms (labels, aria-current, skip-link, ≥4.5:1 contrast).
+- Platform: transactional outbox at every call site (ADR-003 enforced by per-domain rollback tests), SKIP LOCKED dispatcher with dead-letter counter + `last_error`, bounded rate-limiter buckets with idle eviction.
+- CI: contracts job (real drift gate — generated types checked in, gate fails on modified AND untracked output), migrations job (up→down→up reversal proof), e2e job (26-check smoke over real HTTP), docker build job, coverage floor, Dependabot (4 ecosystems), govulncheck pinned + clean; all silent-skip guards removed.
+- Infra: real container healthchecks (API probes /healthz; web /api/health route), compose smoke prerequisites (webhook secret + bootstrap admin), prod config refuses webhook secrets < 32 bytes.
+- Runbook: complete env table, concrete Prometheus alert rules, /metrics edge-ACL example, developer tools, hosting topologies (co-located vs split-domain cookie contract).
+- ADR-011 (memory-token + silent refresh) + ADR-006/008 amendments; hardened e2e smoke (mktemp/trap, --max-time, asserted membership grant).
+
+### Fixed
+- Web: concurrent-401 refresh race (single-flight — no more family-revocation logouts on token expiry), dead session after final 401, school state surviving logout, token removed from localStorage, dashboard stat refetch, debounced search with AbortController, pagination zero-state, nav permission mismatches.
+- Platform: MigrateDown mis-wired direction (negative n ran Up) with regression tests; cmd/migrate exit-code contract documented.
+- Toolchain: Go 1.25.13 pinned across go.mod/Dockerfile/docs (govulncheck clean); x/text, pgx 5.11, prometheus/client 1.24, react 19.3 + web dev-dep minors.
+- Migrations driver safety net: migration-reversal test now drives down through the fixed helper.
+
 ## [1.0.0-alpha] — 2026-09-09
 
 ### Added
