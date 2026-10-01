@@ -2,7 +2,9 @@
 # Build context: repository root
 #   docker build -f services/api/Dockerfile services/api
 
-FROM golang:1.25-alpine AS build
+# golang:1.25.13-alpine matches the toolchain directive in go.mod (issue #101):
+# pinning the PATCH keeps image builds reproducible.
+FROM golang:1.25.13-alpine AS build
 WORKDIR /src
 
 # Layer-cached dependency resolution
