@@ -671,3 +671,186 @@ func TestEnrollLearnerBadReferences(t *testing.T) {
 		t.Fatalf("unknown classGroup should map to ErrValidation, got %v", err)
 	}
 }
+
+// TestOriginSchoolVisibility covers issue #99: a learner created at school A
+// with NO enrollment is visible to A (list + by-id) but not to school B; once
+// enrolled at B, B sees it too. Also proves the guardian-link flow works
+// pre-enrollment for the origin school while staying guarded cross-school.
+func TestOriginSchoolVisibility(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	schoolA := mustSchool(t, f, "ORIG-A", "Origin School A")
+	schoolB := mustSchool(t, f, "ORIG-B", "Origin School B")
+
+	// Created at A, never enrolled anywhere.
+	learner := mustLearner(t, f, schoolA.ID, "Zawadi", "Mwende")
+
+	// List: A sees exactly the learner; B sees nothing.
+	listA, totalA, err := f.svc.ListLearners(ctx, schoolA.ID, "", 100, 0)
+	if err != nil || totalA != 1 || len(listA) != 1 || listA[0].ID != learner.ID {
+		t.Fatalf("origin school list pre-enrollment: n=%d total=%d err=%v", len(listA), totalA, err)
+	}
+	listB, totalB, err := f.svc.ListLearners(ctx, schoolB.ID, "", 100, 0)
+	if err != nil || totalB != 0 || len(listB) != 0 {
+		t.Fatalf("other school must NOT list origin-only learner: n=%d total=%d err=%v", len(listB), totalB, err)
+	}
+	// Name search applies to origin-visible learners too.
+	if _, total, err := f.svc.ListLearners(ctx, schoolA.ID, "Zawadi", 100, 0); err != nil || total != 1 {
+		t.Fatalf("origin school name search: total=%d err=%v", total, err)
+	}
+
+	// By-id: A resolves it, B gets 404 semantics.
+	if got, err := f.svc.LearnerByID(ctx, schoolA.ID, learner.ID); err != nil || got.ID != learner.ID {
+		t.Fatalf("origin school by-id pre-enrollment: %v", err)
+	}
+	if _, err := f.svc.LearnerByID(ctx, schoolB.ID, learner.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other school resolved origin-only learner: %v", err)
+	}
+
+	// Guardian links: the ORIGIN school may link guardians pre-enrollment
+	// (the onboarding flow), another school still cannot.
+	guardian, err := f.svc.CreateGuardian(ctx, schoolA.ID, GuardianInput{FirstName: "Halima", LastName: "Mwende"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	link, err := f.svc.LinkGuardian(ctx, schoolA.ID, learner.ID, LinkInput{GuardianID: guardian.ID, Relationship: "mother"})
+	if err != nil {
+		t.Fatalf("origin school guardian link pre-enrollment rejected: %v", err)
+	}
+	if link.LearnerID != learner.ID {
+		t.Fatalf("guardian link learner mismatch: %+v", link)
+	}
+	if _, err := f.svc.LinkGuardian(ctx, schoolB.ID, learner.ID, LinkInput{GuardianID: guardian.ID, Relationship: "father"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other school linked guardian to origin-only learner: %v", err)
+	}
+	if _, err := f.svc.GuardiansForLearner(ctx, schoolB.ID, learner.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other school listed guardians of origin-only learner: %v", err)
+	}
+
+	// Enroll at B: B now sees it (list + by-id); A still sees it.
+	if _, err := f.svc.EnrollLearner(ctx, schoolB.ID, EnrollmentInput{LearnerID: learner.ID, Status: string(StatusApplicant)}); err != nil {
+		t.Fatal(err)
+	}
+	listB, totalB, err = f.svc.ListLearners(ctx, schoolB.ID, "", 100, 0)
+	if err != nil || totalB != 1 || len(listB) != 1 || listB[0].ID != learner.ID {
+		t.Fatalf("enrolled school list post-enrollment: n=%d total=%d err=%v", len(listB), totalB, err)
+	}
+	if _, err := f.svc.LearnerByID(ctx, schoolB.ID, learner.ID); err != nil {
+		t.Fatalf("enrolled school by-id post-enrollment: %v", err)
+	}
+	listA, totalA, err = f.svc.ListLearners(ctx, schoolA.ID, "", 100, 0)
+	if err != nil || totalA != 1 || len(listA) != 1 {
+		t.Fatalf("origin school must still see its learner: n=%d total=%d err=%v", len(listA), totalA, err)
+	}
+}
+
+// TestOriginSchoolVisibilityHTTP exercises the wired HTTP stack for issue #99:
+// the creating school gets 200/list-hit pre-enrollment, another school gets
+// 404/empty list, and the learner JSON shape carries no origin field (web
+// contract unchanged).
+func TestOriginSchoolVisibilityHTTP(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	if _, err := f.auth.CreateUser(ctx, "registrar@skolara.test", "Registrar", "s3cure-passw0rd!", identity.RolePlatformAdmin); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := f.auth.Login(ctx, "registrar@skolara.test", "s3cure-passw0rd!", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schoolA := mustSchool(t, f, "ORIG-HTTP-A", "Origin HTTP School A")
+	schoolB := mustSchool(t, f, "ORIG-HTTP-B", "Origin HTTP School B")
+	learner := mustLearner(t, f, schoolA.ID, "Nia", "Juma")
+
+	mux := http.NewServeMux()
+	NewHandler(f.svc).Register(mux, f.jwt, f.auth)
+	handler := identity.RequireAuth(f.jwt, tenancy.RequireSchool(f.tenancy, mux))
+
+	do := func(method, path, schoolID string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("X-School-ID", schoolID)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr
+	}
+
+	// Origin school: list hit and by-id 200 BEFORE any enrollment.
+	rr := do("GET", "/api/v1/learners", schoolA.ID)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("origin school list: status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var page struct {
+		Learners []map[string]any `json:"learners"`
+		Total    int              `json:"total"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 || len(page.Learners) != 1 || page.Learners[0]["id"] != learner.ID {
+		t.Fatalf("origin school list pre-enrollment wrong: total=%d body=%s", page.Total, rr.Body.String())
+	}
+	// Web contract unchanged: no origin-school field leaked in the JSON.
+	if _, leaked := page.Learners[0]["originSchoolId"]; leaked {
+		t.Fatalf("originSchoolId must not be serialized: %s", rr.Body.String())
+	}
+	rr = do("GET", "/api/v1/learners/"+learner.ID, schoolA.ID)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("origin school by-id pre-enrollment: status = %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	// Other school: list empty and by-id 404 (no tenant enumeration).
+	rr = do("GET", "/api/v1/learners", schoolB.ID)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("other school list: status = %d", rr.Code)
+	}
+	var bPage struct {
+		Learners []map[string]any `json:"learners"`
+		Total    int              `json:"total"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &bPage); err != nil {
+		t.Fatal(err)
+	}
+	if bPage.Total != 0 || len(bPage.Learners) != 0 {
+		t.Fatalf("other school must not list the learner: %s", rr.Body.String())
+	}
+	rr = do("GET", "/api/v1/learners/"+learner.ID, schoolB.ID)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("other school by-id pre-enrollment: status = %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	// Enroll at B over HTTP: B now sees the learner too.
+	raw, err := json.Marshal(map[string]any{"learnerId": learner.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/api/v1/enrollments", bytes.NewReader(raw))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-School-ID", schoolB.ID)
+	req.Header.Set("Content-Type", "application/json")
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("enroll at B over http: status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	rr = do("GET", "/api/v1/learners/"+learner.ID, schoolB.ID)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("other school by-id post-enrollment: status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	rr = do("GET", "/api/v1/learners", schoolB.ID)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("other school list post-enrollment: status = %d", rr.Code)
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &bPage); err != nil {
+		t.Fatal(err)
+	}
+	if bPage.Total != 1 || len(bPage.Learners) != 1 || bPage.Learners[0]["id"] != learner.ID {
+		t.Fatalf("enrolled school must list the learner: total=%d body=%s", bPage.Total, rr.Body.String())
+	}
+	// Origin school still sees it.
+	if rr := do("GET", "/api/v1/learners/"+learner.ID, schoolA.ID); rr.Code != http.StatusOK {
+		t.Fatalf("origin school by-id post-enrollment: status = %d body=%s", rr.Code, rr.Body.String())
+	}
+}

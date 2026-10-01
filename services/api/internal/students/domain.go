@@ -15,16 +15,20 @@ import (
 )
 
 // Learner is the immutable identity record of a person. It carries no school
-// scoping: enrollment is what binds a learner to a tenant.
+// scoping: enrollment is what binds a learner to a tenant. OriginSchoolID is
+// provenance only — the school that provisioned the record — used to widen
+// tenant VISIBILITY (issue #99) before the first enrollment; it is never
+// ownership and never serialized (web contract unchanged).
 type Learner struct {
-	ID          string     `json:"id"`
-	FirstName   string     `json:"firstName"`
-	LastName    string     `json:"lastName"`
-	MiddleName  *string    `json:"middleName,omitempty"`
-	DateOfBirth *time.Time `json:"dateOfBirth,omitempty"`
-	Gender      string     `json:"gender,omitempty"`
-	ExternalID  *string    `json:"externalId,omitempty"` // school-issued admission number, unique when present
-	CreatedAt   time.Time  `json:"createdAt"`
+	ID             string     `json:"id"`
+	FirstName      string     `json:"firstName"`
+	LastName       string     `json:"lastName"`
+	MiddleName     *string    `json:"middleName,omitempty"`
+	DateOfBirth    *time.Time `json:"dateOfBirth,omitempty"`
+	Gender         string     `json:"gender,omitempty"`
+	ExternalID     *string    `json:"externalId,omitempty"` // school-issued admission number, unique when present
+	CreatedAt      time.Time  `json:"createdAt"`
+	OriginSchoolID string     `json:"-"` // school that created the learner; "" = unknown (pre-000013 rows)
 }
 
 // Guardian is an adult related to one or more learners (parent/caregiver).
@@ -194,12 +198,14 @@ type Repo interface {
 	// write and its outbox event commit atomically (issue #52).
 	CreateLearnerTx(ctx context.Context, q postgres.Querier, l *Learner) error
 	LearnerByID(ctx context.Context, id string) (*Learner, error)
-	// LearnerInSchool resolves a learner ONLY when it holds an enrollment at
-	// the given school — the tenant visibility guard for cross-school reads.
+	// LearnerInSchool resolves a learner ONLY when the school can see it:
+	// it holds an enrollment there OR the school provisioned it
+	// (origin_school_id, issue #99) — the tenant visibility guard for
+	// cross-school reads.
 	LearnerInSchool(ctx context.Context, schoolID, learnerID string) (*Learner, error)
-	// ListLearners lists learners via their enrollments (tenant-scoped),
-	// paginated; query optionally filters by name substring. Returns the
-	// page plus the total match count.
+	// ListLearners lists learners visible to the school (enrollment at the
+	// school or created by it, issue #99), paginated; query optionally
+	// filters by name substring. Returns the page plus the total count.
 	ListLearners(ctx context.Context, schoolID, query string, limit, offset int) ([]*Learner, int, error)
 
 	// Guardians and links.
