@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version-file: services/api/go.mod
           cache-dependency-path: services/api/go.sum
       - name: Check formatting
         run: |
@@ -69,7 +69,7 @@ jobs:
         working-directory: services/api
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:17-alpine
         env:
           POSTGRES_USER: skolara
           POSTGRES_PASSWORD: skolara_test
@@ -88,7 +88,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version-file: services/api/go.mod
           cache-dependency-path: services/api/go.sum
       - name: Integration tests
         run: |
@@ -102,7 +102,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version-file: services/api/go.mod
       - name: govulncheck
         run: |
           if [ ! -f services/api/go.mod ]; then echo "not bootstrapped — skipping"; exit 0; fi

@@ -2,12 +2,14 @@
 # Build context: repository root
 #   docker build -f services/api/Dockerfile services/api
 
-FROM golang:1.23-alpine AS build
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 
 # Layer-cached dependency resolution
 COPY services/api/go.mod services/api/go.sum* ./
-RUN go mod download || true
+# No "|| true": a failed dependency download must fail the build,
+# not silently produce a layer that breaks at compile time.
+RUN go mod download
 
 COPY services/api/ .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/api ./cmd/api
