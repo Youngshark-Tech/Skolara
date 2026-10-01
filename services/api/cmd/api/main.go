@@ -119,7 +119,7 @@ func run() error {
 	idRepo := identity.NewRepo(pool)
 	jwtMgr := identity.NewJWTManager(cfg.JWTSecret, cfg.AccessTokenExpiry)
 	authSvc := identity.NewAuthService(idRepo, jwtMgr)
-	idHandler := identity.NewHandler(authSvc, jwtMgr, pool, cfg.IsProd())
+	idHandler := identity.NewHandler(authSvc, jwtMgr, pool, cfg.IsProd(), cfg.CookieSameSiteAttr())
 
 	if err := bootstrapPlatformAdmin(ctx, authSvc, log); err != nil {
 		return fmt.Errorf("bootstrap admin: %w", err)

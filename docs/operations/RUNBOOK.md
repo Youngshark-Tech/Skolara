@@ -34,6 +34,7 @@ Operational guidance for running Skolara in production-like environments.
 | `SKOLARA_LOG_LEVEL` / `SKOLARA_LOG_FORMAT` | no | `info` / `json` in prod |
 | `SKOLARA_ACCESS_TOKEN_EXPIRY` | no | default `15m` (short-lived by design) |
 | `SKOLARA_REFRESH_TOKEN_EXPIRY` | no | default `720h` (30 days, rotating) |
+| `SKOLARA_COOKIE_SAMESITE` | no | refresh-cookie `SameSite`: `lax` (default) / `strict` / `none` — split-domain hosting requires `none` + HTTPS (see §10) |
 | `SKOLARA_RATE_LIMIT_RPS` / `SKOLARA_RATE_LIMIT_BURST` | no | per-IP token bucket (evicts idle buckets; see #52) |
 | `SKOLARA_MAX_BODY_BYTES` | no | default 1 MiB |
 | `SKOLARA_REDIS_ADDR` | no | **reserved, currently unused by the API** — compose keeps the service for the shared rate limiter on the roadmap |
@@ -142,5 +143,5 @@ See [CONTRIBUTING](../../CONTRIBUTING.md). Compose stack: `docker compose -f inf
 
 The repository carries a multi-service `vercel.json` (web + api). Two supported shapes:
 
-- **Co-located** (same site, e.g. reverse-proxied `app.example.com` → web, `app.example.com/api` → api): refresh cookies work with `SameSite=Lax`; this is the default contract.
-- **Split-domain** (web on `app.example.com`, API on `api.example.com`): cross-site `fetch` will NOT send Lax cookies — silent refresh breaks. This requires `SameSite=None; Secure` on the refresh cookie (with the CSRF review in `docs/security/THREAT_MODEL.md`) or a same-site topology. The decision is tracked in issue #83 — do NOT deploy split-domain until it lands. `NEXT_PUBLIC_API_URL` must be set in the **web build** environment (it is inlined into the client bundle at build time; see `apps/web/.env.example`).
+- **Co-located** (same site, e.g. reverse-proxied `app.example.com` → web, `app.example.com/api` → api): works with the defaults — the refresh cookie is `HttpOnly`, `Path=/` (it carries no readable secret; the wide path lets the web middleware guard observe the session per ADR-011), and `SameSite` comes from `SKOLARA_COOKIE_SAMESITE` (default `lax`).
+- **Split-domain** (web on `app.example.com`, API on `api.example.com`): cross-site `fetch` will NOT send Lax cookies — silent refresh breaks. Set **`SKOLARA_COOKIE_SAMESITE=none`** on the API and keep HTTPS (browsers drop `SameSite=None` cookies that lack `Secure`; production validation already gates `SKOLARA_ENV=production` on strong secrets and real CORS origins). Review the CSRF notes in `docs/security/THREAT_MODEL.md` when enabling `none` — the refresh flow keeps its rotating-token + reuse-detection protections. `NEXT_PUBLIC_API_URL` must be set in the **web build** environment (it is inlined into the client bundle at build time; see `apps/web/.env.example`).

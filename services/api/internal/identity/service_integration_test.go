@@ -5,6 +5,9 @@ package identity
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -451,4 +454,79 @@ func TestCreateUserUnknownRoleNoUserRow(t *testing.T) {
 	if roles != 1 {
 		t.Fatalf("role grant rows = %d, want 1", roles)
 	}
+}
+
+// TestRefreshCookieHeadersOverHTTP drives the wired login/refresh/logout
+// stack over HTTP and pins the Set-Cookie contract from issue #83: Path=/,
+// HttpOnly present, SameSite taken from the operator config (Lax default,
+// None when configured for split-domain hosting).
+func TestRefreshCookieHeadersOverHTTP(t *testing.T) {
+	svc, _ := newAuthService(t)
+	ctx := context.Background()
+	if _, err := svc.CreateUser(ctx, "cookie@school.example", "Cookie Tester", "s3cure-passw0rd!", ""); err != nil {
+		t.Fatal(err)
+	}
+	jwt := NewJWTManager("integration-test-secret-at-least-32-bytes!", time.Minute)
+
+	login := func(handler *Handler) *http.Response {
+		t.Helper()
+		mux := http.NewServeMux()
+		handler.Register(mux)
+		body := strings.NewReader(`{"email":"cookie@school.example","password":"s3cure-passw0rd!"}`)
+		req := httptest.NewRequest("POST", "/api/v1/auth/login", body)
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("login: status = %d body=%s", rr.Code, rr.Body.String())
+		}
+		return rr.Result()
+	}
+
+	assertCookie := func(res *http.Response, wantSameSite, label string) string {
+		t.Helper()
+		raw := res.Header.Get("Set-Cookie")
+		var c *http.Cookie
+		for _, ck := range res.Cookies() {
+			if ck.Name == refreshCookieName {
+				c = ck
+			}
+		}
+		if c == nil {
+			t.Fatalf("%s: skolara_refresh not set; Set-Cookie=%q", label, raw)
+		}
+		if c.Path != "/" {
+			t.Fatalf("%s: Path = %q, want \"/\" (issue #83)", label, c.Path)
+		}
+		if !c.HttpOnly {
+			t.Fatalf("%s: HttpOnly missing", label)
+		}
+		if !strings.Contains(raw, "SameSite="+wantSameSite) {
+			t.Fatalf("%s: Set-Cookie %q missing SameSite=%s", label, raw, wantSameSite)
+		}
+		return c.Value
+	}
+
+	// Default topology: SameSite=Lax (config default), no Secure (dev over HTTP).
+	res := login(NewHandler(svc, jwt, nil, false, http.SameSiteLaxMode))
+	refresh := assertCookie(res, "Lax", "lax handler")
+
+	// The rotated cookie returned by /auth/refresh repeats the attributes.
+	refreshMux := http.NewServeMux()
+	NewHandler(svc, jwt, nil, false, http.SameSiteLaxMode).Register(refreshMux)
+	req := httptest.NewRequest("POST", "/api/v1/auth/refresh", strings.NewReader(`{}`))
+	req.AddCookie(&http.Cookie{Name: refreshCookieName, Value: refresh, Path: "/"})
+	rr := httptest.NewRecorder()
+	refreshMux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("refresh: status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	rotated := assertCookie(rr.Result(), "Lax", "lax handler refresh")
+	if rotated == refresh {
+		t.Fatal("refresh cookie not rotated")
+	}
+
+	// Split-domain topology: operator sets SKOLARA_COOKIE_SAMESITE=none.
+	res = login(NewHandler(svc, jwt, nil, false, http.SameSiteNoneMode))
+	assertCookie(res, "None", "none handler")
 }

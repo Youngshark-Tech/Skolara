@@ -17,6 +17,8 @@ Audit round 3 — full-system audit execution wave (25 issues closed via reviewe
 ### Fixed
 - Web: concurrent-401 refresh race (single-flight — no more family-revocation logouts on token expiry), dead session after final 401, school state surviving logout, token removed from localStorage, dashboard stat refetch, debounced search with AbortController, pagination zero-state, nav permission mismatches.
 - Platform: MigrateDown mis-wired direction (negative n ran Up) with regression tests; cmd/migrate exit-code contract documented.
+- Identity (#83): refresh cookie widened to `Path=/` (HttpOnly, no readable secret — the ADR-011 web middleware guard works as designed) and `SameSite` made operator-configurable via `SKOLARA_COOKIE_SAMESITE` (`lax` default, `strict`/`none`; split-domain hosting opts into `none` + HTTPS — runbook §10).
+- Students (#99): the school that creates a learner now sees it before the first enrollment (nullable `learners.origin_school_id` + visibility = origin OR enrollment); multi-school tenant isolation unchanged.
 - Toolchain: Go 1.25.13 pinned across go.mod/Dockerfile/docs (govulncheck clean); x/text, pgx 5.11, prometheus/client 1.24, react 19.3 + web dev-dep minors.
 - Migrations driver safety net: migration-reversal test now drives down through the fixed helper.
 

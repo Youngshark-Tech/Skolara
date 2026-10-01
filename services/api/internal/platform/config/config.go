@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -44,6 +45,12 @@ type Config struct {
 	RateLimitBurst int
 
 	MaxBodyBytes int64
+
+	// CookieSameSite is the SameSite attribute for the identity refresh
+	// cookie (issue #83): "lax" (default), "strict", or "none". Split-domain
+	// hosting (web and API on different sites) requires "none" — which
+	// browsers only honor over HTTPS, i.e. Secure cookies in production.
+	CookieSameSite string
 }
 
 func (c *Config) IsProd() bool { return c.Env == EnvProduction }
@@ -66,6 +73,7 @@ func Load() (*Config, error) {
 		RateLimitRPS:       floatOr("SKOLARA_RATE_LIMIT_RPS", 20),
 		RateLimitBurst:     intOr("SKOLARA_RATE_LIMIT_BURST", 40),
 		MaxBodyBytes:       int64Or("SKOLARA_MAX_BODY_BYTES", 1<<20), // 1 MiB
+		CookieSameSite:     strings.ToLower(strings.TrimSpace(envOr("SKOLARA_COOKIE_SAMESITE", "lax"))),
 	}
 
 	switch c.Env {
@@ -111,7 +119,27 @@ func (c *Config) validate() error {
 	if c.IsProd() && len(c.WebhookSecret) < 32 {
 		return fmt.Errorf("config: SKOLARA_WEBHOOK_SECRET must be >= 32 bytes in production")
 	}
+	switch c.CookieSameSite {
+	case "lax", "strict", "none":
+	default:
+		return fmt.Errorf("config: SKOLARA_COOKIE_SAMESITE must be one of lax|strict|none, got %q", c.CookieSameSite)
+	}
 	return nil
+}
+
+// CookieSameSiteAttr maps the validated CookieSameSite setting onto the
+// net/http constant the identity refresh cookie must carry (issue #83). The
+// value is validated at Load time, so the default branch is unreachable for
+// config built through Load.
+func (c *Config) CookieSameSiteAttr() http.SameSite {
+	switch c.CookieSameSite {
+	case "strict":
+		return http.SameSiteStrictMode
+	case "none":
+		return http.SameSiteNoneMode
+	default:
+		return http.SameSiteLaxMode
+	}
 }
 
 func envOr(k, d string) string {

@@ -20,14 +20,18 @@ type Handler struct {
 	jwt           *JWTManager
 	pool          *postgres.Pool
 	secureCookies bool
+	sameSite      http.SameSite
 }
 
 // NewHandler builds the identity HTTP handler. The pool is provided by the
 // composition root so handlers can emit outbox events. secureCookies gates
 // the Secure attribute of the refresh cookie (true in production HTTPS
-// deployments; false so local plain-HTTP browsers store the cookie).
-func NewHandler(svc *AuthService, jwt *JWTManager, pool *postgres.Pool, secureCookies bool) *Handler {
-	return &Handler{svc: svc, jwt: jwt, pool: pool, secureCookies: secureCookies}
+// deployments; false so local plain-HTTP browsers store the cookie). sameSite
+// sets the refresh cookie's SameSite attribute from operator config
+// (SKOLARA_COOKIE_SAMESITE, issue #83: lax by default; split-domain hosting
+// opts into none, which requires HTTPS).
+func NewHandler(svc *AuthService, jwt *JWTManager, pool *postgres.Pool, secureCookies bool, sameSite http.SameSite) *Handler {
+	return &Handler{svc: svc, jwt: jwt, pool: pool, secureCookies: secureCookies, sameSite: sameSite}
 }
 
 const refreshCookieName = "skolara_refresh"
@@ -393,22 +397,30 @@ func withClaims(ctx context.Context, c *SessionClaims) context.Context {
 
 // --- helpers ------------------------------------------------------------------
 
+// setRefreshCookie sends the rotating refresh token as an HttpOnly cookie.
+// Path is "/" (issue #83): the cookie carries no readable secret, and the
+// wider path lets same-origin web navigations — the ADR-011 middleware route
+// guard — observe the session, which Path=/api/v1/auth silently hid.
+// SameSite comes from operator config (SKOLARA_COOKIE_SAMESITE): lax by
+// default, none for split-domain hosting (requires HTTPS/Secure).
 func (h *Handler) setRefreshCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     refreshCookieName,
 		Value:    token,
-		Path:     "/api/v1/auth",
+		Path:     "/",
 		Expires:  time.Now().Add(RefreshTokenExpiry),
 		HttpOnly: true,
 		Secure:   h.secureCookies,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: h.sameSite,
 	})
 }
 
+// unsetRefreshCookie clears the refresh cookie. Every attribute (Path,
+// SameSite, Secure) must match the set cookie for browsers to delete it.
 func (h *Handler) unsetRefreshCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
-		Name: refreshCookieName, Value: "", Path: "/api/v1/auth",
-		MaxAge: -1, HttpOnly: true, Secure: h.secureCookies, SameSite: http.SameSiteLaxMode,
+		Name: refreshCookieName, Value: "", Path: "/",
+		MaxAge: -1, HttpOnly: true, Secure: h.secureCookies, SameSite: h.sameSite,
 	})
 }
 
