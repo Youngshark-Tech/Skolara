@@ -29,7 +29,8 @@ export function Stat({ label, value, hint }: { label: string; value: string; hin
     <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
       <p className="mt-1 text-2xl font-semibold text-ink">{value}</p>
-      {hint && <p className="mt-1 text-xs text-slate-400">{hint}</p>}
+      {/* slate-500 on white is ≥4.5:1 (slate-400 ≈2.9:1 failed WCAG AA for text). */}
+      {hint && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
     </div>
   );
 }
@@ -41,13 +42,9 @@ export function Button({
   disabled,
   onClick,
   className = "",
-}: {
-  children: ReactNode;
+  ...rest
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "secondary" | "ghost";
-  type?: "button" | "submit";
-  disabled?: boolean;
-  onClick?: () => void;
-  className?: string;
 }) {
   const styles: Record<string, string> = {
     primary: "bg-primary text-white hover:bg-primary-dark",
@@ -56,10 +53,11 @@ export function Button({
   };
   return (
     <button
+      {...rest}
       type={type}
       disabled={disabled}
       onClick={onClick}
-      className={`inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${styles[variant]} ${className}`}
+      className={`inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50 ${styles[variant]} ${className}`}
     >
       {children}
     </button>
@@ -76,8 +74,24 @@ export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   );
 }
 
-export function Label({ children }: { children: ReactNode }) {
-  return <label className="mb-1 block text-xs font-medium text-slate-600">{children}</label>;
+/**
+ * Programmatic form-control label (#57 a11y): pair with the control via
+ * htmlFor/id — placeholder-only inputs are never an accessible name.
+ */
+export function Label({
+  htmlFor,
+  children,
+  className = "mb-1 block text-xs font-medium text-slate-600",
+}: {
+  htmlFor?: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <label htmlFor={htmlFor} className={className}>
+      {children}
+    </label>
+  );
 }
 
 export function Badge({ tone, children }: { tone: "green" | "blue" | "amber" | "red" | "slate"; children: ReactNode }) {
@@ -102,4 +116,21 @@ export function ErrorNote({ message }: { message: string | null }) {
       {message}
     </p>
   );
+}
+
+/**
+ * Polite live-region notice for success outcomes (#57 a11y): screen readers
+ * announce it without stealing focus, unlike the old plain <p>.
+ */
+export function Notice({ children }: { children: ReactNode }) {
+  return (
+    <p role="status" className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+      {children}
+    </p>
+  );
+}
+
+/** Decorative loading placeholder (aria-hidden; pair with a live region if needed). */
+export function Skeleton({ className = "" }: { className?: string }) {
+  return <div aria-hidden="true" className={`animate-pulse rounded bg-slate-200 ${className}`} />;
 }

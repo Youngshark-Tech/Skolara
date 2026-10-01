@@ -64,6 +64,17 @@ export interface RequestOptions {
   body?: unknown;
   /** Skip the automatic refresh-and-retry (used by the login call itself). */
   noRetry?: boolean;
+  /**
+   * Abort a request that a newer one supersedes (search-as-you-type #57):
+   * the fetch rejects with an AbortError which callers must ignore.
+   */
+  signal?: AbortSignal;
+  /**
+   * Observe the final Response of a successful request (after any 401
+   * refresh-and-retry) — used to read response headers like X-Total-Count
+   * that the JSON envelope does not carry (#58 pagination).
+   */
+  onResponse?: (res: Response) => void;
 }
 
 export interface SessionResponse {
@@ -137,7 +148,7 @@ export async function apiFetch<T>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
-  const { method = "GET", body, noRetry } = options;
+  const { method = "GET", body, noRetry, signal, onResponse } = options;
 
   const doFetch = () => {
     const headers: Record<string, string> = {};
@@ -150,6 +161,7 @@ export async function apiFetch<T>(
       method,
       headers,
       credentials: "include",
+      signal,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   };
@@ -171,6 +183,8 @@ export async function apiFetch<T>(
     }
     // reason === "network": transient — the 401 below is surfaced as-is.
   }
+
+  onResponse?.(res);
 
   if (res.status === 204) return undefined as T;
 

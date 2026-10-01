@@ -31,7 +31,8 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
   if (loading || !me) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <p className="text-sm text-slate-400">Redirecting…</p>
+        {/* slate-500, not slate-400: body text needs ≥4.5:1 contrast (#57). */}
+        <p className="text-sm text-slate-500">Redirecting…</p>
       </div>
     );
   }

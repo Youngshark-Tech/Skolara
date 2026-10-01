@@ -87,8 +87,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
    * the session is rebuilt with a silent /auth/refresh (the HttpOnly refresh
    * cookie rides along). A network blip is NOT a logout: one silent retry,
    * then an explicit error state the user can retry from.
+   *
+   * Returns whether the session is usable afterwards so switchSchool can pick
+   * between the context refetch and its hard-reload fallback (#57).
    */
-  const reload = useCallback(async () => {
+  const boot = useCallback(async (): Promise<boolean> => {
     setLoading(true);
     setError(null);
     try {
@@ -103,7 +106,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           } else {
             clearSessionState();
           }
-          return;
+          return false;
         }
         setAccessToken(outcome.session.accessToken);
         setAuthHint(true);
@@ -122,6 +125,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setActiveSchoolId(active);
       setSchoolId(active);
       setAuthHint(true);
+      return true;
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         // Definitive 401 already cleared credentials + notified expiry.
@@ -133,10 +137,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             : "Something went wrong while loading your session — try again.",
         );
       }
+      return false;
     } finally {
       setLoading(false);
     }
   }, [clearSessionState]);
+
+  const reload = useCallback(async () => {
+    await boot();
+  }, [boot]);
 
   useEffect(() => {
     void reload();
@@ -181,11 +190,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, [clearSessionState]);
 
-  const switchSchool = useCallback((schoolId: string) => {
-    setSchoolId(schoolId);
-    setActiveSchoolId(schoolId);
-    window.location.reload();
-  }, []);
+  /**
+   * Switch the active tenant WITHOUT a full page reload (#57): every page keys
+   * its queries on activeSchoolId, so updating context state is the refetch —
+   * school-scoped data reloads through React, preserving the in-memory token
+   * and scroll position. If this tab has no in-memory session we boot one
+   * silently. When that boot fails, NO reload fallback is needed: a network
+   * failure already surfaces the provider's explicit retry panel, and a
+   * definitive expiry clears state and routes to /login on its own.
+   */
+  const switchSchool = useCallback(
+    (schoolId: string) => {
+      setSchoolId(schoolId);
+      setActiveSchoolId(schoolId);
+      if (getAccessToken()) return;
+      void boot();
+    },
+    [boot],
+  );
 
   const value = useMemo(
     () => ({

@@ -38,11 +38,26 @@ export interface NavEntry {
   anyPermission: string[];
 }
 
+/**
+ * Navigation entries for the role-aware shell.
+ *
+ * Gating notes (#57):
+ * - Attendance gates on `attendance.record` ONLY (least privilege): the
+ *   workspace's single action is recording roll calls, so a read-only auditor
+ *   gets no nav entry (the page gate is aligned in attendance/page.tsx).
+ * - Assignments has no screen yet — the entry is still listed so the role can
+ *   discover the coming-soon placeholder instead of the feature being silent.
+ * - Enrollments shares the student permission pair: the API guards the
+ *   enrollment list with student.read and mutations with student.manage
+ *   (services/api/internal/students/http.go).
+ */
 export const NAV_ENTRIES: NavEntry[] = [
   { href: "/", label: "Command Center", anyPermission: [] },
   { href: "/students", label: "Students", anyPermission: ["student.read", "student.manage"] },
+  { href: "/enrollments", label: "Enrollments", anyPermission: ["student.read", "student.manage"] },
   { href: "/academics", label: "Academics", anyPermission: ["academics.read", "academics.manage"] },
-  { href: "/attendance", label: "Attendance", anyPermission: ["attendance.read", "attendance.record"] },
+  { href: "/attendance", label: "Attendance", anyPermission: ["attendance.record"] },
+  { href: "/assignments", label: "Assignments", anyPermission: ["assignment.read", "assignment.manage"] },
   { href: "/finance", label: "Finance", anyPermission: ["finance.read", "finance.manage"] },
 ];
 

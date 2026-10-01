@@ -6,7 +6,10 @@ import { can } from "@/lib/permissions";
 
 export default function AttendancePage() {
   const { me } = useSession();
-  const allowed = can(me, "attendance.read") || can(me, "attendance.manage");
+  // Aligned with the nav gate (#57): attendance.record is the permission the
+  // workspace needs (recording roll calls) — least privilege, and consistent
+  // with the route guards the API registers (identity.PermAttendanceRecord).
+  const allowed = can(me, "attendance.record");
   return (
     <div className="space-y-6">
       <header>

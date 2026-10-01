@@ -29,10 +29,11 @@ const me = {
 };
 const memberships = [
   { userId: "u1", schoolId: "school-1", role: "admin", status: "active" },
+  { userId: "u1", schoolId: "school-2", role: "teacher", status: "active" },
 ];
 
 function SessionProbe() {
-  const { me, loading, error, activeSchoolId, logout } = useSession();
+  const { me, loading, error, activeSchoolId, logout, switchSchool } = useSession();
   return (
     <div>
       <span data-testid="loading">{String(loading)}</span>
@@ -41,6 +42,9 @@ function SessionProbe() {
       <span data-testid="school">{activeSchoolId ?? ""}</span>
       <button data-testid="logout" onClick={() => void logout()}>
         sign out
+      </button>
+      <button data-testid="switch" onClick={() => switchSchool("school-2")}>
+        switch school
       </button>
     </div>
   );
@@ -151,5 +155,27 @@ describe("SessionProvider teardown", () => {
     expect(getSchoolId()).toBeNull();
     expect(localStorage.getItem("skolara_school_id")).toBeNull();
     expect(document.cookie).not.toContain("skolara_auth_hint=1");
+  });
+
+  it("switchSchool swaps the tenant in-context — a pure state update, no reload burst (#57)", async () => {
+    setAccessToken("tok");
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, me))
+      .mockResolvedValueOnce(jsonResponse(200, memberships));
+
+    render(
+      <SessionProvider>
+        <SessionProbe />
+      </SessionProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("school").textContent).toBe("school-1"));
+
+    fireEvent.click(screen.getByTestId("switch"));
+
+    await waitFor(() => expect(screen.getByTestId("school").textContent).toBe("school-2"));
+    // Only the boot's two calls: switching is a context refetch (pages key
+    // their queries on activeSchoolId), NOT a page reload or re-login.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(localStorage.getItem("skolara_school_id")).toBe("school-2");
   });
 });
