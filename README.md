@@ -1,5 +1,5 @@
 # Skolara
-
+skolara-chi.vercel.app
 **The Intelligent Operating System for Schools.**
 
 Skolara is an intelligent school operating and financial infrastructure platform. It connects students, parents, teachers, and administrators across academic operations, workforce planning, timetabling, communication, discipline, finance, and school-wide automation — designed as infrastructure for one school, a school group, or a network of schools.
