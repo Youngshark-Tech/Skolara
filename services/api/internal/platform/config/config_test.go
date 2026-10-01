@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/http"
 	"os"
 	"testing"
 	"time"
@@ -119,5 +120,51 @@ func TestLoadMissingDatabaseURLErrors(t *testing.T) {
 	t.Setenv("SKOLARA_ENV", "development")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error: DATABASE_URL required outside test env")
+	}
+}
+
+// TestCookieSameSite covers the issue #83 config knob: SKOLARA_COOKIE_SAMESITE
+// defaults to lax, accepts lax|strict|none (case/space tolerant), maps onto
+// the http.SameSite constants, and rejects anything else at load time.
+func TestCookieSameSite(t *testing.T) {
+	setEnv(t, map[string]string{
+		"SKOLARA_ENV":  "development",
+		"DATABASE_URL": "postgres://localhost/skolara_dev",
+	})
+	t.Setenv("SKOLARA_WEBHOOK_SECRET", "")
+
+	// Default: lax.
+	os.Unsetenv("SKOLARA_COOKIE_SAMESITE")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("default load: %v", err)
+	}
+	if cfg.CookieSameSite != "lax" || cfg.CookieSameSiteAttr() != http.SameSiteLaxMode {
+		t.Fatalf("default SameSite = %q/%v, want lax", cfg.CookieSameSite, cfg.CookieSameSiteAttr())
+	}
+
+	valid := map[string]http.SameSite{
+		"lax":      http.SameSiteLaxMode,
+		"strict":   http.SameSiteStrictMode,
+		"none":     http.SameSiteNoneMode,
+		" Strict ": http.SameSiteStrictMode, // trimmed + lowercased
+		"NONE":     http.SameSiteNoneMode,
+	}
+	for in, want := range valid {
+		t.Setenv("SKOLARA_COOKIE_SAMESITE", in)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("SKOLARA_COOKIE_SAMESITE=%q: %v", in, err)
+		}
+		if cfg.CookieSameSiteAttr() != want {
+			t.Fatalf("SKOLARA_COOKIE_SAMESITE=%q: attr = %v", in, cfg.CookieSameSiteAttr())
+		}
+	}
+
+	for _, bad := range []string{"permissive", "lax strict", "lax,strict", "off"} {
+		t.Setenv("SKOLARA_COOKIE_SAMESITE", bad)
+		if _, err := Load(); err == nil {
+			t.Fatalf("SKOLARA_COOKIE_SAMESITE=%q: expected load error", bad)
+		}
 	}
 }

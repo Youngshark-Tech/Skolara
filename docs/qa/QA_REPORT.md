@@ -1,7 +1,7 @@
 # Skolara QA Report — Production Readiness Assessment
 
 **Report date:** 2026-10-01 · **Assessment:** Third full-system audit round (audit round 2 execution) — every open finding from the platform/web/infra/CI/contracts/docs audit wave implemented, gated, independently reviewed, and merged; final re-audit pass over the merged result.
-**Verdict: READY FOR CONTROLLED CUSTOMER ONBOARDING** (single-school and small-group pilots), with two tracked MEDIUM follow-ups (#83, #99) that do not block the co-located pilot topology, plus the post-CI dependency tracker (#102).
+**Verdict: READY FOR CONTROLLED CUSTOMER ONBOARDING** (single-school and small-group pilots), with the #99 learner-visibility fix landed this same wave (PR #107, under review) and the post-CI dependency tracker (#102) remaining; the #83 cookie decision was resolved in this round.
 
 ---
 
@@ -39,13 +39,14 @@ See `docs/security/THREAT_MODEL.md` (STRIDE). Round-3 additions: access token is
 ## 5. Known gaps (tracked, non-blocking for co-located pilots)
 
 1. **CI runners**: GitHub Actions workflows are fully wired but runtime is pending an org-level billing/verification fix (see issue #2) — `startup_failure` on all runs; all gates were executed locally and are reproducible via the documented commands. **Action for the org owner: github.com/organizations/Youngshark-Tech/billing/plans.**
-2. **#83 (MEDIUM)**: refresh cookie `Path=/api/v1/auth` + `SameSite=Lax` — split-domain hosting needs the cookie decision; co-located (same-site) deployments work as shipped.
-3. **#99 (MEDIUM)**: a learner is invisible to its creating school before first enrollment (visibility = enrollment JOIN); workaround via the create→enroll deep-link ships in the product.
-4. **#102**: major dependency bumps (actions v7, eslint 10, tailwind 4, eslint-config-next 16, gitleaks v3) deferred until CI runs.
-5. **Rate limiting is per-process** — add a shared Redis limiter before multi-replica production (roadmap).
-6. **`/metrics` is unauthenticated** — restrict at the edge (runbook §4 nginx snippet).
-7. **Learner↔user linking**, notification fabric, password reset — roadmap waves 1–2.
-8. Web workspaces for academics/attendance/finance/assignments are contract-wired placeholders ("coming soon"); enrollments + students are fully interactive.
+2. **#99 (MEDIUM)**: a learner was invisible to its creating school before first enrollment (visibility = enrollment JOIN) — **implemented this wave in PR #107** (nullable `learners.origin_school_id` + widened visibility predicate); tracked here until it merges. The create→deep-link workaround shipped in the product remains valid.
+3. **#102**: major dependency bumps (actions v7, eslint 10, tailwind 4, eslint-config-next 16, gitleaks v3) deferred until CI runs.
+4. **Rate limiting is per-process** — add a shared Redis limiter before multi-replica production (roadmap).
+5. **`/metrics` is unauthenticated** — restrict at the edge (runbook §4 nginx snippet).
+6. **Learner↔user linking**, notification fabric, password reset — roadmap waves 1–2.
+7. Web workspaces for academics/attendance/finance/assignments are contract-wired placeholders ("coming soon"); enrollments + students are fully interactive.
+
+**Resolved in this round:** **#83 (MEDIUM)** — refresh cookie widened to `Path=/` (HttpOnly, carries no readable secret; the ADR-011 web middleware guard can now observe it) and `SameSite` made operator-configurable via `SKOLARA_COOKIE_SAMESITE` (`lax` default, `strict`/`none` accepted; split-domain hosting opts into `none` + HTTPS per runbook §10). Covered by config + identity integration tests.
 
 ## 6. Quality metrics at assessment time
 
@@ -58,4 +59,4 @@ See `docs/security/THREAT_MODEL.md` (STRIDE). Round-3 additions: access token is
 
 ## 7. Sign-off
 
-The platform is internally consistent, tenant-isolated, financially correct by provable invariant, observable, documented for operators, and honest about what remains. Proceed to co-located pilot onboarding per the runbook checklist; track #83/#99/#102 and the roadmap in the normal issue workflow.
+The platform is internally consistent, tenant-isolated, financially correct by provable invariant, observable, documented for operators, and honest about what remains. Proceed to co-located pilot onboarding per the runbook checklist; track #99 (PR #107)/#102 and the roadmap in the normal issue workflow.
