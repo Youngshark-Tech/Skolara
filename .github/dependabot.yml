@@ -1,0 +1,27 @@
+# Dependabot keeps third-party dependencies current (issue #63).
+# Weekly cadence across every ecosystem the repo ships.
+version: 2
+updates:
+  # CI actions themselves (checkout, setup-go, gitleaks-action, ...).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Frontend app.
+  - package-ecosystem: npm
+    directory: /apps/web
+    schedule:
+      interval: weekly
+
+  # API contract package (openapi-typescript).
+  - package-ecosystem: npm
+    directory: /packages/contracts
+    schedule:
+      interval: weekly
+
+  # Go API service.
+  - package-ecosystem: gomod
+    directory: /services/api
+    schedule:
+      interval: weekly

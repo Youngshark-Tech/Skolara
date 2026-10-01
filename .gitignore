@@ -39,6 +39,3 @@ Thumbs.db
 *.prof
 .coverage
 htmlcov/
-
-# Generated (checked-in only via CI-verified regeneration)
-packages/contracts/generated/

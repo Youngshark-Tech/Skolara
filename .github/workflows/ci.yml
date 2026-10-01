@@ -13,53 +13,67 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # Pinned tool versions (issue #63: no @latest in CI).
+  GOVULNCHECK_VERSION: v1.1.4
+
 jobs:
   secrets:
     name: Secret Scanning (gitleaks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Action pins: SHA of each action's current-major latest tag (verified
+      # via the GitHub API), so third-party CI code cannot float.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   api:
-    name: API — Vet, Build, Unit Tests
+    name: API — Vet, Build, Unit Tests, Coverage Floor
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: services/api
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: services/api/go.mod
           cache-dependency-path: services/api/go.sum
       - name: Check formatting
         run: |
-          test -f go.mod || { echo "services/api not bootstrapped yet — skipping"; exit 0; }
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
       - name: Vet
-        run: |
-          test -f go.mod || exit 0
-          go vet ./...
+        run: go vet ./...
       - name: Build
+        run: go build ./...
+      - name: Unit tests (with coverage)
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+      # Issue #63: enforce a coverage floor. Floor is 8% — the measured unit
+      # total is 7.6% (domain packages are exercised by the -tags=integration
+      # suite; see PR for the ratchet plan). Raising the floor is a one-line
+      # change here once coverage grows.
+      - name: Coverage floor (total >= 8%)
         run: |
-          test -f go.mod || exit 0
-          go build ./...
-      - name: Unit tests
-        run: |
-          test -f go.mod || exit 0
-          go test -race -count=1 -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out > coverage-func.txt
+          tail -1 coverage-func.txt
+          total=$(awk '/^total:/ {gsub(/%/,"",$3); print $3}' coverage-func.txt)
+          awk -v t="$total" 'BEGIN {
+            if (t + 0 < 8) { print "FAIL: total coverage " t "% is below the 8% floor"; exit 1 }
+            print "OK: total coverage " t "% >= 8% floor"
+          }'
       - name: Upload coverage
         if: hashFiles('services/api/coverage.out') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: api-coverage
-          path: services/api/coverage.out
+          path: |
+            services/api/coverage.out
+            services/api/coverage-func.txt
 
   api-integration:
     name: API — Integration Tests (Postgres)
@@ -85,60 +99,179 @@ jobs:
       DATABASE_URL: postgres://skolara:skolara_test@localhost:5432/skolara_test?sslmode=disable
       TEST_DATABASE_URL: postgres://skolara:skolara_test@localhost:5432/skolara_test?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: services/api/go.mod
           cache-dependency-path: services/api/go.sum
       - name: Integration tests
-        run: |
-          test -f go.mod || { echo "services/api not bootstrapped yet — skipping"; exit 0; }
-          go test -race -count=1 -tags=integration ./...
+        run: go test -race -count=1 -tags=integration ./...
 
   api-vuln:
-    name: API — Vulnerability Check (govulncheck)
+    name: API — Vulnerability Check (govulncheck@v1.1.4)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: services/api/go.mod
-      - name: govulncheck
+      - name: govulncheck (pinned version)
         run: |
-          if [ ! -f services/api/go.mod ]; then echo "not bootstrapped — skipping"; exit 0; fi
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          cd services/api && govulncheck ./...
+          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
+          cd services/api && "$(go env GOPATH)/bin/govulncheck" ./...
+
+  contracts:
+    name: Contracts — Generated Types Drift Gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/contracts
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: packages/contracts/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Generate types from spec
+        run: npm run generate
+      # Fails when generated/ is modified OR untracked-new relative to the
+      # committed types (issue #62 — the old git-diff-only gate was a no-op).
+      - name: Drift check
+        run: npm run check
+      - name: Tests
+        run: npm test --if-present
+
+  migrations:
+    name: Migrations — Up / Down / Up (Postgres 17)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: skolara
+          POSTGRES_PASSWORD: skolara_test
+          POSTGRES_DB: skolara_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U skolara"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://skolara:skolara_test@localhost:5432/skolara_test?sslmode=disable
+      DATABASE_URL: postgres://skolara:skolara_test@localhost:5432/skolara_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: services/api/go.mod
+          cache-dependency-path: services/api/go.sum
+      # Reversibility gate: scratch DB -> up all -> down all -> up all ->
+      # assert key tables exist after the final up (issue #63).
+      - name: TestMigrationsUpAndDownAll
+        run: go test -race -count=1 -tags=integration ./internal/platform/postgres/ -run TestMigrationsUpAndDownAll -v
+      # Also smoke the cmd/migrate binary itself. NOTE the binary contract:
+      # positional args `up` / `down` (no dash; unknown args exit 2), and
+      # `down` steps back exactly ONE migration — down-ALL is covered by the
+      # Go test above via golang-migrate's Down().
+      - name: migrate binary smoke (up -> down -> up)
+        run: |
+          go run ./cmd/migrate up
+          go run ./cmd/migrate down
+          go run ./cmd/migrate up
+
+  e2e:
+    name: E2E — Live API Smoke
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: skolara
+          POSTGRES_PASSWORD: skolara_test
+          POSTGRES_DB: skolara_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U skolara"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SKOLARA_ENV: development
+      SKOLARA_HTTP_ADDR: ":8080"
+      DATABASE_URL: postgres://skolara:skolara_test@localhost:5432/skolara_test?sslmode=disable
+      # Dev-only placeholders, mirroring scripts/e2e-smoke.sh (issue #63):
+      # the smoke script signs webhooks with the HMAC key below and logs in
+      # as the bootstrap admin.
+      SKOLARA_JWT_SECRET: ci-e2e-jwt-secret-0123456789abcdef0123456789
+      SKOLARA_WEBHOOK_SECRET: dev-webhook-secret-0123456789abcdef
+      SKOLARA_BOOTSTRAP_ADMIN_EMAIL: admin@skolara.test
+      SKOLARA_BOOTSTRAP_ADMIN_PASSWORD: "S0pera!Admin2026"
+      SKOLARA_API_URL: http://127.0.0.1:8080
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: services/api/go.mod
+          cache-dependency-path: services/api/go.sum
+      - name: Boot API and run e2e smoke
+        run: |
+          go build -o /tmp/skolara-api ./cmd/api
+          /tmp/skolara-api > /tmp/api.log 2>&1 &
+          api_pid=$!
+          trap 'kill $api_pid 2>/dev/null || true' EXIT
+          for i in $(seq 1 60); do
+            curl -fsS "$SKOLARA_API_URL/healthz" > /dev/null 2>&1 && break
+            sleep 0.5
+          done
+          curl -fsS "$SKOLARA_API_URL/healthz" || { echo "API did not become healthy"; cat /tmp/api.log; exit 1; }
+          bash "$GITHUB_WORKSPACE/scripts/e2e-smoke.sh" "$SKOLARA_API_URL"
+
+  docker:
+    name: Docker — Build Images (no push)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Both Dockerfiles COPY repo-rooted paths (services/api/...,
+      # apps/web/...) and docker-compose.yml builds them with `context: ..`
+      # from infrastructure/ — the build context is the repository ROOT for
+      # both. Images are built and discarded; nothing is pushed.
+      - name: Build api image
+        run: docker build -f services/api/Dockerfile . -t skolara-api:ci
+      - name: Build web image
+        run: docker build -f apps/web/Dockerfile --build-arg NEXT_PUBLIC_API_URL=http://localhost:8080 . -t skolara-web:ci
 
   web:
-    name: Web — Lint, Typecheck, Build
+    name: Web — Lint, Typecheck, Tests, Build
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: apps/web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - name: Install
-        run: |
-          test -f package.json || { echo "apps/web not bootstrapped yet — skipping"; exit 0; }
-          npm ci
+        run: npm ci
       - name: Lint
-        run: |
-          test -f package.json || exit 0
-          npm run lint
+        run: npm run lint
       - name: Typecheck
-        run: |
-          test -f package.json || exit 0
-          npm run typecheck
+        run: npm run typecheck
       - name: Unit tests
-        run: |
-          test -f package.json || exit 0
-          npm test -- --run
+        run: npm test -- --run
       - name: Build
-        run: |
-          test -f package.json || exit 0
-          npm run build
+        run: npm run build

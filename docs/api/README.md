@@ -1,7 +1,7 @@
 # API Conventions
 
 - **Single source of truth**: [`packages/contracts/openapi.yaml`](../../packages/contracts/openapi.yaml) — OpenAPI 3.1, all `/api/v1` endpoints, schemas, error envelope, pagination and idempotency conventions.
-- **Generated types**: [`packages/contracts/generated/schema.d.ts`](../../packages/contracts/generated/schema.d.ts) — regenerated via `npm run generate`, drift-checked in CI (`npm run check` → `git diff --exit-code`) and by the Go `contract` drift test.
+- **Generated types**: [`packages/contracts/generated/schema.d.ts`](../../packages/contracts/generated/schema.d.ts) — committed to git; regenerated via `npm run generate` and drift-checked in CI by the `contracts` job (`npm run check` asserts `generated/` is byte-current with the spec) plus the Go `contract` drift test.
 - Versioned: `/api/v1/…`
 - Consistent error envelope: `{ "error": { "code", "message", "details?" } }`
 - Pagination: `limit` (default 50, max 100) / `offset`, `X-Total-Count` header + `total` in body on collection endpoints
