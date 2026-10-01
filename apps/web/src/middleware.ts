@@ -28,6 +28,11 @@ export function middleware(request: NextRequest) {
   const url = request.nextUrl.clone();
   url.pathname = "/login";
   url.search = "";
+  // Preserve the requested deep link so the login surface can return the user
+  // to it after signing in; the client sanitizes the value before honoring it
+  // (lib/next-path.ts — the middleware only forwards, never trusts).
+  const target = `${request.nextUrl.pathname}${request.nextUrl.search}`;
+  if (target !== "/") url.searchParams.set("next", target);
   return NextResponse.redirect(url, 307);
 }
 

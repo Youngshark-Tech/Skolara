@@ -43,4 +43,22 @@ describe("permission gating", () => {
     const lockedOut = meWith({});
     expect(visibleNav(lockedOut).map((n) => n.href)).toEqual(["/"]);
   });
+
+  it("gates Attendance on attendance.record only (least privilege, #57)", () => {
+    // A read-only auditor cannot record roll calls -> no entry (the page gate
+    // is aligned to the same permission).
+    const readOnly = meWith({ "attendance.read": true });
+    expect(visibleNav(readOnly).map((n) => n.href)).not.toContain("/attendance");
+
+    const recorder = meWith({ "attendance.record": true });
+    expect(visibleNav(recorder).map((n) => n.href)).toContain("/attendance");
+  });
+
+  it("keeps Assignments discoverable for assignment roles (#57)", () => {
+    const grader = meWith({ "assignment.read": true });
+    expect(visibleNav(grader).map((n) => n.href)).toContain("/assignments");
+
+    const others = meWith({ "student.manage": true, "finance.manage": true });
+    expect(visibleNav(others).map((n) => n.href)).not.toContain("/assignments");
+  });
 });

@@ -13,7 +13,9 @@ const eslintConfig = [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   {
     rules: {
-      "@typescript-eslint/no-explicit-any": "off",
+      // Re-enabled (#57): explicit `any` defeats the point of TS strict mode.
+      // Contract shapes live in src/types/api.ts instead.
+      "@typescript-eslint/no-explicit-any": "error",
     },
   },
 ];

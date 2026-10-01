@@ -39,3 +39,6 @@ Thumbs.db
 *.prof
 .coverage
 htmlcov/
+
+# TypeScript incremental build info
+*.tsbuildinfo
