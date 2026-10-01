@@ -24,7 +24,7 @@ jobs:
     steps:
       # Action pins: SHA of each action's current-major latest tag (verified
       # via the GitHub API), so third-party CI code cannot float.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
@@ -38,7 +38,7 @@ jobs:
       run:
         working-directory: services/api
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: services/api/go.mod
@@ -99,7 +99,7 @@ jobs:
       DATABASE_URL: postgres://skolara:skolara_test@localhost:5432/skolara_test?sslmode=disable
       TEST_DATABASE_URL: postgres://skolara:skolara_test@localhost:5432/skolara_test?sslmode=disable
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: services/api/go.mod
@@ -111,7 +111,7 @@ jobs:
     name: API — Vulnerability Check (govulncheck@v1.1.4)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: services/api/go.mod
@@ -127,7 +127,7 @@ jobs:
       run:
         working-directory: packages/contracts
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
@@ -168,7 +168,7 @@ jobs:
       TEST_DATABASE_URL: postgres://skolara:skolara_test@localhost:5432/skolara_test?sslmode=disable
       DATABASE_URL: postgres://skolara:skolara_test@localhost:5432/skolara_test?sslmode=disable
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: services/api/go.mod
@@ -220,7 +220,7 @@ jobs:
       SKOLARA_BOOTSTRAP_ADMIN_PASSWORD: "S0pera!Admin2026"
       SKOLARA_API_URL: http://127.0.0.1:8080
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: services/api/go.mod
@@ -242,7 +242,7 @@ jobs:
     name: Docker — Build Images (no push)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Both Dockerfiles COPY repo-rooted paths (services/api/...,
       # apps/web/...) and docker-compose.yml builds them with `context: ..`
       # from infrastructure/ — the build context is the repository ROOT for
@@ -259,7 +259,7 @@ jobs:
       run:
         working-directory: apps/web
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
