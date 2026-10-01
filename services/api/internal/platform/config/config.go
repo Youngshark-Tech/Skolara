@@ -105,6 +105,12 @@ func (c *Config) validate() error {
 	if c.IsProd() && c.CORSOrigins[0] == "http://localhost:3000" {
 		return fmt.Errorf("config: SKOLARA_CORS_ORIGINS must be configured in production")
 	}
+	// Webhook HMAC secret: production refuses to boot on a missing or weak
+	// secret, mirroring the JWT-secret policy above. Development and test may
+	// run without one (webhook deliveries will 401 until it is configured).
+	if c.IsProd() && len(c.WebhookSecret) < 32 {
+		return fmt.Errorf("config: SKOLARA_WEBHOOK_SECRET must be >= 32 bytes in production")
+	}
 	return nil
 }
 

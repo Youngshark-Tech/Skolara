@@ -54,10 +54,11 @@ func TestLoadProductionRequiresSecrets(t *testing.T) {
 
 func TestLoadProductionValid(t *testing.T) {
 	setEnv(t, map[string]string{
-		"SKOLARA_ENV":          "production",
-		"DATABASE_URL":         "postgres://x",
-		"SKOLARA_JWT_SECRET":   "production-grade-secret-with-more-than-32-bytes!",
-		"SKOLARA_CORS_ORIGINS": "https://app.skolara.com, https://admin.skolara.com",
+		"SKOLARA_ENV":            "production",
+		"DATABASE_URL":           "postgres://x",
+		"SKOLARA_JWT_SECRET":     "production-grade-secret-with-more-than-32-bytes!",
+		"SKOLARA_WEBHOOK_SECRET": "production-webhook-hmac-0123456789abcdef",
+		"SKOLARA_CORS_ORIGINS":   "https://app.skolara.com, https://admin.skolara.com",
 	})
 	cfg, err := Load()
 	if err != nil {
@@ -65,6 +66,44 @@ func TestLoadProductionValid(t *testing.T) {
 	}
 	if len(cfg.CORSOrigins) != 2 {
 		t.Errorf("cors origins = %v", cfg.CORSOrigins)
+	}
+	if cfg.WebhookSecret != "production-webhook-hmac-0123456789abcdef" {
+		t.Errorf("webhook secret not loaded from environment")
+	}
+}
+
+func TestLoadProductionRequiresWebhookSecret(t *testing.T) {
+	setEnv(t, map[string]string{
+		"SKOLARA_ENV":          "production",
+		"DATABASE_URL":         "postgres://x",
+		"SKOLARA_JWT_SECRET":   "production-grade-secret-with-more-than-32-bytes!",
+		"SKOLARA_CORS_ORIGINS": "https://app.skolara.com",
+	})
+	for _, secret := range []string{"", "short", "0123456789abcdef0123456789abcde"} { // 0, 5, 31 bytes
+		t.Setenv("SKOLARA_WEBHOOK_SECRET", secret)
+		if _, err := Load(); err == nil {
+			t.Fatalf("expected error for webhook secret of %d bytes", len(secret))
+		}
+	}
+
+	t.Setenv("SKOLARA_WEBHOOK_SECRET", "0123456789abcdef0123456789abcdef") // boundary: exactly 32
+	if _, err := Load(); err != nil {
+		t.Fatalf("unexpected error for 32-byte webhook secret: %v", err)
+	}
+}
+
+func TestLoadDevelopmentWebhookSecretOptional(t *testing.T) {
+	setEnv(t, map[string]string{
+		"SKOLARA_ENV":  "development",
+		"DATABASE_URL": "postgres://localhost/skolara_dev",
+	})
+	t.Setenv("SKOLARA_WEBHOOK_SECRET", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.WebhookSecret != "" {
+		t.Errorf("dev webhook secret = %q, want empty (dev defaults unchanged)", cfg.WebhookSecret)
 	}
 }
 

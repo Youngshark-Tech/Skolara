@@ -22,7 +22,7 @@ implementations, fake APIs, disabled tests, or known broken builds are rejected.
 
 ### Backend (services/api)
 
-Requires Go 1.23+, PostgreSQL 16, and Docker (or a local Postgres).
+Requires Go 1.25+ (matches `services/api/go.mod`), PostgreSQL 17, and Docker (or a local Postgres).
 
 ```bash
 cd services/api
