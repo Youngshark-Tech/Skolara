@@ -182,7 +182,7 @@ export function EnrollPanel({ preselectLearnerId, onEnrolled, onClose }: EnrollP
           type="button"
           onClick={onClose}
           aria-label="Close enroll panel"
-          className="rounded px-2 py-1 text-slate-500 hover:text-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          className="rounded-sm px-2 py-1 text-slate-500 hover:text-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         >
           Close ✕
         </button>

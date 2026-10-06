@@ -41,7 +41,7 @@ export function LoginForm({ nextParam }: { nextParam: string | null }) {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
-      <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
+      <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-8 shadow-xs">
         <h1 className="text-2xl font-bold text-primary">Skolara</h1>
         <p className="mt-1 text-sm text-slate-500">Sign in to your school workspace</p>
         <form className="mt-6 space-y-4" onSubmit={submit}>

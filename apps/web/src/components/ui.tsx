@@ -12,7 +12,7 @@ export function Card({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-xs">
       {(title || action) && (
         <header className="mb-4 flex items-center justify-between">
           {title && <h2 className="text-sm font-semibold text-slate-700">{title}</h2>}
@@ -26,7 +26,7 @@ export function Card({
 
 export function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-xs">
       <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
       <p className="mt-1 text-2xl font-semibold text-ink">{value}</p>
       {/* slate-500 on white is ≥4.5:1 (slate-400 ≈2.9:1 failed WCAG AA for text). */}
@@ -69,7 +69,7 @@ export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...rest}
-      className={`w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary ${className}`}
+      className={`w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm outline-hidden focus:border-primary focus:ring-1 focus:ring-primary ${className}`}
     />
   );
 }
@@ -132,5 +132,5 @@ export function Notice({ children }: { children: ReactNode }) {
 
 /** Decorative loading placeholder (aria-hidden; pair with a live region if needed). */
 export function Skeleton({ className = "" }: { className?: string }) {
-  return <div aria-hidden="true" className={`animate-pulse rounded bg-slate-200 ${className}`} />;
+  return <div aria-hidden="true" className={`animate-pulse rounded-sm bg-slate-200 ${className}`} />;
 }
