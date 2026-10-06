@@ -156,9 +156,17 @@ export function EnrollmentsView() {
   }, [loadLearnerNames]);
 
   // Admit-story deep link: /enrollments?enroll=<learnerId> opens the flow.
-  useEffect(() => {
+  // Render-time adjustment keyed on (param, permission) — behavior-identical
+  // to the previous effect INCLUDING the mount case (the sentinel `null`
+  // makes the first render always "change", so a deep link present at load
+  // opens the dialog once the session resolves canManage), while satisfying
+  // react-hooks v6's set-state-in-effect rule (#102 Next 16).
+  const deepLink = `${enrollParam ?? ""}|${canManage}`;
+  const [lastDeepLink, setLastDeepLink] = useState<string | null>(null);
+  if (deepLink !== lastDeepLink) {
+    setLastDeepLink(deepLink);
     if (enrollParam && canManage) setEnrollOpen(true);
-  }, [enrollParam, canManage]);
+  }
 
   const performTransition = async (enrollmentId: string, to: EnrollmentStatus) => {
     setBusyId(enrollmentId);
