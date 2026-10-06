@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useSession } from "@/lib/session";
 import { visibleNav, type NavEntry } from "@/lib/permissions";
 import { Badge } from "@/components/ui";
@@ -107,11 +107,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const nav = visibleNav(me);
   const [menuOpen, setMenuOpen] = useState(false);
-
-  // Close the mobile drawer whenever navigation happens.
-  useEffect(() => {
+  // Close the mobile drawer whenever navigation happens. Render-time
+  // adjustment (React-documented "adjust state when a reactive value
+  // changes") — replaces the setState-in-effect the react-hooks v6 rule
+  // rejects (#102 Next 16 upgrade).
+  const [prevPath, setPrevPath] = useState(pathname);
+  if (prevPath !== pathname) {
+    setPrevPath(pathname);
     setMenuOpen(false);
-  }, [pathname]);
+  }
 
   if (loading) {
     return (
