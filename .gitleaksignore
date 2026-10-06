@@ -1,0 +1,12 @@
+# gitleaks false-positive allowlist (issue #111).
+# Each entry carries its audited rationale. New findings still fail the build.
+# Audit 2026-10-06: both values are syntactic placeholders with zero authority
+# (CI-scoped dev-only E2E env; boundary-length unit test), manually verified
+# by the QA pass in #111. Re-audit whenever the lines change (fingerprints
+# include the introducing commit).
+#
+# E2E job dev-only placeholder JWT secret (documented in-file, mirrors
+# scripts/e2e-smoke.sh, issue #63):
+978849393d933c1ee697f2c3a8a4ba0dea6faa31:.github/workflows/ci.yml:generic-api-key:217
+# config_test.go webhook-secret boundary test value (exactly 32 bytes):
+75615fedf8a46d02937af1a32442f9bc46b13599:services/api/internal/platform/config/config_test.go:generic-api-key:89
