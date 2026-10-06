@@ -82,10 +82,12 @@ describe("StudentsPage (#57 search + pagination craft)", () => {
     );
 
     render(<StudentsPage />);
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    // Wait for the FETCHED UI consequence, not the fetch call: the state
+    // update must flush before assertions. Waiting on the call count let
+    // CI-runner timing decide pass/fail (issue #113, run 37448399465).
+    await waitFor(() => expect(screen.getByText("No learners found")).toBeTruthy());
 
     expect(screen.getByText("0 learners")).toBeTruthy(); // pager span
-    expect(screen.getByText("No learners found")).toBeTruthy();
     expect(screen.queryByText(/1–0 of 0/)).toBeNull();
   });
 
