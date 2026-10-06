@@ -5,6 +5,9 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # Ops trigger: re-run the full gate matrix on demand (issue #109) without a
+  # no-op commit. Restricted to write-access users by GitHub.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
