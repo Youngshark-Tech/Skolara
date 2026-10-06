@@ -348,7 +348,7 @@ export function EnrollmentsView() {
                                 </p>
                                 <div className="flex gap-2">
                                   <Button
-                                    className="!px-2 !py-1 text-xs"
+                                    className="px-2! py-1! text-xs"
                                     disabled={busyId === e.id}
                                     onClick={() => void performTransition(e.id, confirming.to)}
                                   >
@@ -356,7 +356,7 @@ export function EnrollmentsView() {
                                   </Button>
                                   <Button
                                     variant="secondary"
-                                    className="!px-2 !py-1 text-xs"
+                                    className="px-2! py-1! text-xs"
                                     onClick={() => setConfirmMove(null)}
                                   >
                                     Cancel
@@ -371,7 +371,7 @@ export function EnrollmentsView() {
                                   <Button
                                     key={to}
                                     variant="secondary"
-                                    className="!px-2 !py-1 text-xs"
+                                    className="px-2! py-1! text-xs"
                                     disabled={busyId === e.id}
                                     onClick={() => requestTransition(e, to)}
                                   >

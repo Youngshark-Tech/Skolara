@@ -95,7 +95,7 @@ function SignOutButton({ className = "" }: { className?: string }) {
     <button
       type="button"
       onClick={() => void logout()}
-      className={`rounded text-xs font-medium text-red-600 hover:text-red-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600 ${className}`}
+      className={`rounded-sm text-xs font-medium text-red-600 hover:text-red-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600 ${className}`}
     >
       Sign out
     </button>

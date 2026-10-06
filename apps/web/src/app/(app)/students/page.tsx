@@ -136,7 +136,7 @@ export default function StudentsPage() {
                     setOffset(0);
                     setQuery(e.target.value);
                   }}
-                  className="!w-48"
+                  className="w-48!"
                 />
               </div>
             }
