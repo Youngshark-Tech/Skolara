@@ -7,7 +7,8 @@
     },
     "api": {
       "root": "services/api",
-      "runtime": "go"
+      "runtime": "go",
+      "entrypoint": "cmd/api"
     }
   },
   "rewrites": [
