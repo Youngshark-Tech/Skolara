@@ -1,6 +1,23 @@
 "use client";
 
+import Link from "next/link";
 import type { ReactNode } from "react";
+
+/**
+ * Shared button style system (#129): one source of truth for Button and
+ * ButtonLink so navigation and action controls share a single visual
+ * language. Variants: primary (filled), secondary (bordered), ghost (text).
+ */
+export type ButtonVariant = "primary" | "secondary" | "ghost";
+
+export function buttonClass(variant: ButtonVariant = "primary", extra = ""): string {
+  const styles: Record<ButtonVariant, string> = {
+    primary: "bg-primary text-white hover:bg-primary-dark",
+    secondary: "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50",
+    ghost: "text-slate-600 hover:bg-slate-100",
+  };
+  return `inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50 ${styles[variant]} ${extra}`;
+}
 
 export function Card({
   title,
@@ -44,20 +61,15 @@ export function Button({
   className = "",
   ...rest
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "secondary" | "ghost";
+  variant?: ButtonVariant;
 }) {
-  const styles: Record<string, string> = {
-    primary: "bg-primary text-white hover:bg-primary-dark",
-    secondary: "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50",
-    ghost: "text-slate-600 hover:bg-slate-100",
-  };
   return (
     <button
       {...rest}
       type={type}
       disabled={disabled}
       onClick={onClick}
-      className={`inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50 ${styles[variant]} ${className}`}
+      className={buttonClass(variant, className)}
     >
       {children}
     </button>
@@ -133,4 +145,23 @@ export function Notice({ children }: { children: ReactNode }) {
 /** Decorative loading placeholder (aria-hidden; pair with a live region if needed). */
 export function Skeleton({ className = "" }: { className?: string }) {
   return <div aria-hidden="true" className={`animate-pulse rounded-sm bg-slate-200 ${className}`} />;
+}
+
+/**
+ * Link styled as a button — use for navigations styled as CTAs (hero, auth
+ * pages). A real <a> keeps semantics (middle-click, copy link, screen-reader
+ * announcements) instead of a <button> wrapped in an anchor (#129).
+ */
+export function ButtonLink({
+  href,
+  variant = "primary",
+  className = "",
+  children,
+  ...rest
+}: React.ComponentProps<typeof Link> & { variant?: ButtonVariant }) {
+  return (
+    <Link href={href} className={buttonClass(variant, className)} {...rest}>
+      {children}
+    </Link>
+  );
 }
