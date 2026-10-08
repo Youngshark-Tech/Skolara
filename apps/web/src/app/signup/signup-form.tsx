@@ -7,6 +7,7 @@ import { useSession } from "@/lib/session";
 import { safeNextPath } from "@/lib/next-path";
 import { apiFetch, ApiError } from "@/lib/api";
 import { Button, ErrorNote, Input, Label } from "@/components/ui";
+import { AuthShell } from "@/components/auth-shell";
 
 /**
  * Signup surface (#130): provisions the school workspace + admin account via
@@ -64,9 +65,9 @@ export function SignupForm({ nextParam }: { nextParam: string | null }) {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
-      <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-8 shadow-xs">
-        <h1 className="text-2xl font-bold text-primary">Create your school workspace</h1>
+    <AuthShell>
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Create your school workspace</h1>
         <p className="mt-1 text-sm text-slate-500">
           One account for you, one workspace for your school — ready in under a minute.
         </p>
@@ -141,13 +142,13 @@ export function SignupForm({ nextParam }: { nextParam: string | null }) {
             {busy ? "Creating workspace…" : "Create workspace"}
           </Button>
         </form>
-        <p className="mt-4 text-sm text-slate-600">
+        <p className="mt-6 text-sm text-slate-600">
           Already have an account?{" "}
           <Link href="/login" className="font-medium text-primary hover:underline">
             Log in
           </Link>
         </p>
       </div>
-    </div>
+    </AuthShell>
   );
 }

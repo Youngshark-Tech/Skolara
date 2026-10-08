@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useSession } from "@/lib/session";
 import { safeNextPath } from "@/lib/next-path";
 import { Button, ErrorNote, Input, Label } from "@/components/ui";
+import { AuthShell } from "@/components/auth-shell";
 
 /**
  * Login surface: exchanges email+password for a session (refresh cookie),
@@ -42,10 +43,12 @@ export function LoginForm({ nextParam }: { nextParam: string | null }) {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
-      <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-8 shadow-xs">
-        <h1 className="text-2xl font-bold text-primary">Skolara</h1>
-        <p className="mt-1 text-sm text-slate-500">Sign in to your school workspace</p>
+    <AuthShell>
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Sign in to your workspace</h1>
+        <p className="mt-1 text-sm text-slate-500">
+          Welcome back — enter your school account details.
+        </p>
         <form className="mt-6 space-y-4" onSubmit={submit}>
           <div>
             <Label htmlFor="login-email">Email</Label>
@@ -76,7 +79,13 @@ export function LoginForm({ nextParam }: { nextParam: string | null }) {
             {busy ? "Signing in…" : "Sign in"}
           </Button>
         </form>
+        <p className="mt-6 text-sm text-slate-600">
+          New to Skolara?{" "}
+          <a href="/signup" className="font-medium text-primary hover:underline">
+            Create your school workspace
+          </a>
+        </p>
       </div>
-    </div>
+    </AuthShell>
   );
 }
