@@ -37,7 +37,12 @@ export default function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Skip Next internals and static assets; everything else goes through the
-  // guard (public paths are decided in lib/auth-cookies.ts).
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // MUST stay a static literal (Next parses proxy entries statically — a
+  // shared constant fails the build). Skips Next internals, static assets,
+  // and ALL /api/* paths: those belong to the API service. In the Vercel
+  // topology the top-level rewrite routes /api/* to the Go service before
+  // this middleware runs, but in same-origin setups without that rewrite
+  // (local `next start`, third-party proxies) letting the guard 307 an API
+  // call into /login HTML masked real errors as HTML 200s (#136).
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/).*)"],
 };

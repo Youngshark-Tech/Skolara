@@ -230,3 +230,32 @@ describe("resolveApiUrl (#127)", () => {
     expect(resolveApiUrl(undefined, false)).toBe("http://localhost:8080");
   });
 });
+
+describe("apiFetch non-JSON 2xx guard (#136)", () => {
+  beforeEach(() => {
+    fetchMock.mockReset();
+    localStorage.clear();
+    setAccessToken(null);
+    setSchoolId(null);
+    setOnSessionExpired(null);
+  });
+
+  afterEach(() => {
+    setOnSessionExpired(null);
+  });
+
+  it("throws a clean ApiError instead of resolving null when a 2xx body is not JSON", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response("<html>login page</html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      }),
+    );
+
+    await expect(apiFetch("http://localhost/x")).rejects.toMatchObject({
+      name: "ApiError",
+      status: 502,
+      code: "bad_response",
+    });
+  });
+});

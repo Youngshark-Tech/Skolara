@@ -13,6 +13,10 @@
 export const REFRESH_COOKIE_NAME = "skolara_refresh";
 export const AUTH_HINT_COOKIE_NAME = "skolara_auth_hint";
 
+// The proxy guard's matcher lives INLINE in proxy.ts (Next parses proxy
+// entries statically — a shared constant fails the build; issue #136). It
+// skips /api/* so the API service owns those paths everywhere.
+
 const PUBLIC_PATHS = new Set(["/", "/login", "/signup", "/api/health", "/favicon.ico"]);
 
 /** Public paths never hit the auth guard. */
