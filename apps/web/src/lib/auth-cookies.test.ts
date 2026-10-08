@@ -39,3 +39,4 @@ describe("auth-cookies (middleware guard facts)", () => {
     expect(decideAuth("/login", false, false)).toBe("allow");
   });
 });
+

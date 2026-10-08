@@ -212,6 +212,18 @@ export async function apiFetch<T>(
 
   const payload = await res.json().catch(() => null);
 
+  if (res.ok && payload === null) {
+    // 2xx with a non-JSON body (issue #136): a proxy or error page answered
+    // instead of the API (e.g. a same-origin deployment without the API
+    // rewrite — the login POST used to surface as a raw TypeError from the
+    // caller's property access). Never resolve a typed payload of null.
+    throw new ApiError(
+      502,
+      "bad_response",
+      "The server returned an unexpected response — if this persists, contact your administrator.",
+    );
+  }
+
   if (!res.ok) {
     if (res.status === 401) setAccessToken(null);
     if (sessionDefinitivelyOver) {
