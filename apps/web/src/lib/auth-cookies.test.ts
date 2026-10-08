@@ -14,7 +14,9 @@ describe("auth-cookies (middleware guard facts)", () => {
   });
 
   it("treats public paths as always allowed", () => {
+    expect(isPublicPath("/")).toBe(true); // #129: public landing page
     expect(isPublicPath("/login")).toBe(true);
+    expect(isPublicPath("/signup")).toBe(true); // #130: public signup
     expect(isPublicPath("/api/health")).toBe(true);
     expect(isPublicPath("/favicon.ico")).toBe(true);
     expect(isPublicPath("/_next/static/chunks/main.js")).toBe(true);
@@ -23,8 +25,11 @@ describe("auth-cookies (middleware guard facts)", () => {
 
   it("redirects protected paths without session-cookie evidence", () => {
     expect(decideAuth("/students", false, false)).toBe("redirect");
-    expect(decideAuth("/", false, false)).toBe("redirect");
     expect(decideAuth("/finance", false, false)).toBe("redirect");
+    // "/" became public with #129 (landing page); the workspace moved to
+    // /dashboard which stays protected.
+    expect(decideAuth("/", false, false)).toBe("allow");
+    expect(decideAuth("/dashboard", false, false)).toBe("redirect");
   });
 
   it("allows protected paths with a refresh or hint cookie present", () => {

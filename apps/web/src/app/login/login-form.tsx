@@ -19,7 +19,9 @@ export function LoginForm({ nextParam }: { nextParam: string | null }) {
   const [busy, setBusy] = useState(false);
 
   // Sanitize ONCE at the boundary; components below only ever see a safe path.
-  const nextPath = safeNextPath(nextParam) ?? "/";
+  // Default destination is the workspace dashboard: "/" is now the public
+  // landing page, so a signed-in user belongs behind the app shell (#129).
+  const nextPath = safeNextPath(nextParam) ?? "/dashboard";
 
   useEffect(() => {
     if (me) router.replace(nextPath);

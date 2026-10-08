@@ -13,7 +13,7 @@
 export const REFRESH_COOKIE_NAME = "skolara_refresh";
 export const AUTH_HINT_COOKIE_NAME = "skolara_auth_hint";
 
-const PUBLIC_PATHS = new Set(["/login", "/api/health", "/favicon.ico"]);
+const PUBLIC_PATHS = new Set(["/", "/login", "/signup", "/api/health", "/favicon.ico"]);
 
 /** Public paths never hit the auth guard. */
 export function isPublicPath(pathname: string): boolean {
