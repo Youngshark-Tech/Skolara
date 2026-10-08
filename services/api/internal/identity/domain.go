@@ -5,6 +5,7 @@ package identity
 
 import (
 	"context"
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/postgres"
 	"time"
 )
 
@@ -53,6 +54,9 @@ type Repo interface {
 	// CreateUserWithRole atomically inserts the user and grants a
 	// platform-scope role in the same transaction (issue #53).
 	CreateUserWithRole(ctx context.Context, u *User, roleName string) error
+	// CreateUserTx inserts a user inside a CALLER-OWNED transaction
+	// (issue #130: the signup workflow provisions user + school in one tx).
+	CreateUserTx(ctx context.Context, q postgres.Querier, u *User) error
 	UserByID(ctx context.Context, id string) (*User, error)
 	UserByEmail(ctx context.Context, email string) (*User, error)
 	UpdateUserStatus(ctx context.Context, id string, status UserStatus, failedAttempts int, lockedUntil *time.Time) error

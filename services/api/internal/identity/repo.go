@@ -67,6 +67,13 @@ func (r *pgRepo) CreateUser(ctx context.Context, u *User) error {
 	return r.createUserQ(ctx, r.pool, u)
 }
 
+// CreateUserTx inserts a user inside a CALLER-OWNED transaction (issue #130):
+// the signup workflow provisions user + group + school + membership in one
+// tx, so the insert must join that tx instead of opening its own.
+func (r *pgRepo) CreateUserTx(ctx context.Context, q postgres.Querier, u *User) error {
+	return r.createUserQ(ctx, q, u)
+}
+
 func (r *pgRepo) createUserQ(ctx context.Context, q postgres.Querier, u *User) error {
 	row := q.QueryRow(ctx,
 		`INSERT INTO users (id, email, name, password_hash) VALUES ($1,$2,$3,$4)

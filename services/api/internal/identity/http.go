@@ -15,12 +15,40 @@ import (
 )
 
 // Handler exposes identity endpoints.
+// SignupRequest carries the self-serve onboarding payload (issue #130).
+type SignupRequest struct {
+	SchoolName string `json:"schoolName"`
+	AdminName  string `json:"adminName"`
+	Email      string `json:"email"`
+	Password   string `json:"password"`
+}
+
+// SignupOutcome identifies the provisioned workspace (no session is issued
+// here — the client completes onboarding through the standard login flow, so
+// cookie/session handling stays on one code path).
+type SignupOutcome struct {
+	UserID     string `json:"userId"`
+	Email      string `json:"email"`
+	Name       string `json:"name"`
+	SchoolID   string `json:"schoolId"`
+	SchoolCode string `json:"schoolCode"`
+	SchoolName string `json:"schoolName"`
+}
+
+// SignupService provisions a school workspace + admin account (implemented by
+// the composition-root signup workflow; issue #130). Consumer-side interface —
+// identity never imports the workflow package.
+type SignupService interface {
+	Signup(ctx context.Context, in SignupRequest) (*SignupOutcome, error)
+}
+
 type Handler struct {
 	svc           *AuthService
 	jwt           *JWTManager
 	pool          *postgres.Pool
 	secureCookies bool
 	sameSite      http.SameSite
+	signup        SignupService // optional; nil = signup route not mounted
 }
 
 // NewHandler builds the identity HTTP handler. The pool is provided by the
@@ -30,14 +58,19 @@ type Handler struct {
 // sets the refresh cookie's SameSite attribute from operator config
 // (SKOLARA_COOKIE_SAMESITE, issue #83: lax by default; split-domain hosting
 // opts into none, which requires HTTPS).
-func NewHandler(svc *AuthService, jwt *JWTManager, pool *postgres.Pool, secureCookies bool, sameSite http.SameSite) *Handler {
-	return &Handler{svc: svc, jwt: jwt, pool: pool, secureCookies: secureCookies, sameSite: sameSite}
+func NewHandler(svc *AuthService, jwt *JWTManager, pool *postgres.Pool, secureCookies bool, sameSite http.SameSite, signupSvc SignupService) *Handler {
+	return &Handler{svc: svc, jwt: jwt, pool: pool, secureCookies: secureCookies, sameSite: sameSite, signup: signupSvc}
 }
 
 const refreshCookieName = "skolara_refresh"
 
 func (h *Handler) Register(mux *http.ServeMux) {
 	observability.RegisterFunc(mux, "POST /api/v1/auth/login", h.handleLogin)
+	if h.signup != nil {
+		// PUBLIC self-serve onboarding (#130): rate-limited by the global
+		// per-IP middleware; issues NO session (client logs in afterwards).
+		observability.RegisterFunc(mux, "POST /api/v1/auth/signup", h.handleSignup)
+	}
 	observability.RegisterFunc(mux, "POST /api/v1/auth/refresh", h.handleRefresh)
 	observability.RegisterFunc(mux, "POST /api/v1/auth/logout", h.handleLogout)
 	observability.Register(mux, "GET /api/v1/me", RequireAuth(h.jwt, http.HandlerFunc(h.handleMe)))
@@ -107,6 +140,34 @@ func (h *Handler) auditLogin(r *http.Request, actor, email string, err error) {
 		ResourceID:   email,
 		RequestID:    httpx.RequestID(r.Context()),
 		Detail:       detail,
+	})
+}
+
+// handleSignup provisions a new school workspace (issue #130). Public route:
+// 201 with the created account/school, 409 on a taken email, 400 on
+// validation. Deliberately issues NO session — the client completes
+// onboarding via the standard login flow (single cookie/session code path).
+func (h *Handler) handleSignup(w http.ResponseWriter, r *http.Request) {
+	var req SignupRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		return
+	}
+	out, err := h.signup.Signup(r.Context(), req)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrEmailTaken):
+			httpx.WriteError(w, http.StatusConflict, "email_taken", "that email is already registered — try signing in instead")
+		case errors.Is(err, ErrValidation):
+			httpx.BadRequest(w, err.Error())
+		default:
+			httpx.WriteError(w, http.StatusInternalServerError, "signup_failed", "could not create the workspace — try again")
+		}
+		return
+	}
+	w.Header().Set("Location", "/api/v1/auth/login")
+	httpx.JSON(w, http.StatusCreated, map[string]any{
+		"user":   map[string]any{"id": out.UserID, "email": out.Email, "name": out.Name},
+		"school": map[string]any{"id": out.SchoolID, "code": out.SchoolCode, "name": out.SchoolName},
 	})
 }
 

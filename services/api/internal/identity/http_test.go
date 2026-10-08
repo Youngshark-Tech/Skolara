@@ -25,7 +25,7 @@ func TestRefreshCookieAttributes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			// secureCookies=true mirrors a production HTTPS deployment.
-			h := NewHandler(nil, nil, nil, true, tc.sameSite)
+			h := NewHandler(nil, nil, nil, true, tc.sameSite, nil)
 
 			rr := httptest.NewRecorder()
 			h.setRefreshCookie(rr, "refresh-token-value")

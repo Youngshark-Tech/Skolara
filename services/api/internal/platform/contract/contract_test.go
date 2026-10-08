@@ -81,7 +81,7 @@ func buildRouter() *http.ServeMux {
 	jwt := identity.NewJWTManager("drift-check-secret-0123456789abcdef0123456789abcdef", 1<<30)
 	var resolver identity.PermissionResolver = nilResolver{}
 
-	idHandler := identity.NewHandler(identity.NewAuthService(identity.NewRepo(nil), jwt), jwt, nil, false, http.SameSiteLaxMode)
+	idHandler := identity.NewHandler(identity.NewAuthService(identity.NewRepo(nil), jwt), jwt, nil, false, http.SameSiteLaxMode, nil)
 	tenHandler := tenancy.NewHandler(tenancy.NewService(tenancy.NewRepo(nil), nil))
 	stuHandler := students.NewHandler(students.NewService(students.NewRepo(nil), nil))
 	acaHandler := academics.NewHandler(academics.NewService(academics.NewRepo(nil), nil))
