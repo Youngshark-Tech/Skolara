@@ -13,8 +13,30 @@
  * payloads).
  */
 
-export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
+/**
+ * Resolve the API base URL (issue #127):
+ * - An explicitly set NEXT_PUBLIC_API_URL always wins. It may be a full URL
+ *   (split deployment, e.g. "https://api.example.com") or an empty string
+ *   (same-origin calls behind a reverse proxy / Vercel Services rewrite).
+ * - Otherwise production builds default to SAME-ORIGIN (""): the Vercel
+ *   Services rewrite routes /api/* to the Go service on the shared domain, so
+ *   relative URLs are correct and the refresh cookie stays first-party.
+ * - Dev keeps the local Go server default of http://localhost:8080.
+ * A localhost default previously left production browsers calling the
+ * user's own machine — why login silently failed on the first Vercel deploy.
+ */
+export function resolveApiUrl(
+  explicit: string | undefined,
+  isProduction: boolean,
+): string {
+  if (explicit !== undefined) return explicit;
+  return isProduction ? "" : "http://localhost:8080";
+}
+
+export const API_URL = resolveApiUrl(
+  process.env.NEXT_PUBLIC_API_URL,
+  process.env.NODE_ENV === "production",
+);
 
 const SCHOOL_KEY = "skolara_school_id";
 

@@ -162,6 +162,12 @@ func run() error {
 
 	root := http.NewServeMux()
 	root.Handle("/healthz", observability.Handler(pool.Ping))
+	// Aliased health route for fronted deployments (issue #127): on Vercel the
+	// public surface of the API service is only reachable under the /api prefix
+	// (top-level rewrite "/api/(.*)"), so platform health checks need this
+	// alias; /healthz stays for direct/private traffic. StripPrefix maps the
+	// request back onto the inner observability mux, which only knows /healthz.
+	root.Handle("/api/healthz", http.StripPrefix("/api", observability.Handler(pool.Ping)))
 	root.Handle("/readyz", observability.Handler(pool.Ping))
 	root.Handle("/metrics", observability.Handler(pool.Ping))
 	root.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

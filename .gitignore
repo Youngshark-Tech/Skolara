@@ -42,3 +42,4 @@ htmlcov/
 
 # TypeScript incremental build info
 *.tsbuildinfo
+services/api/api

@@ -5,6 +5,7 @@ import {
   getAccessToken,
   getSchoolId,
   refreshSession,
+  resolveApiUrl,
   setAccessToken,
   setOnSessionExpired,
   setSchoolId,
@@ -206,5 +207,26 @@ describe("refreshSession", () => {
     const outcome = await refreshSession();
 
     expect(outcome).toEqual({ ok: false, reason: "network" });
+  });
+});
+
+describe("resolveApiUrl (#127)", () => {
+  it("an explicitly set URL always wins in production", () => {
+    expect(resolveApiUrl("https://api.example.com", true)).toBe(
+      "https://api.example.com",
+    );
+  });
+
+  it("an explicitly set EMPTY string wins — same-origin opt-in", () => {
+    expect(resolveApiUrl("", true)).toBe("");
+    expect(resolveApiUrl("", false)).toBe("");
+  });
+
+  it("production without an explicit value defaults to same-origin", () => {
+    expect(resolveApiUrl(undefined, true)).toBe("");
+  });
+
+  it("development without an explicit value keeps the local Go server", () => {
+    expect(resolveApiUrl(undefined, false)).toBe("http://localhost:8080");
   });
 });

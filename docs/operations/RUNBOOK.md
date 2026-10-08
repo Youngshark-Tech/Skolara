@@ -4,6 +4,8 @@ Operational guidance for running Skolara in production-like environments.
 
 ## 1. Topology
 
+> Deploying on Vercel? See the dedicated [Vercel deployment guide](DEPLOY_VERCEL.md).
+
 ```
 [Browser / Client]
       │ HTTPS
@@ -28,7 +30,7 @@ Operational guidance for running Skolara in production-like environments.
 | `SKOLARA_JWT_SECRET` | yes | ≥ 32 random bytes; rotate with dual-accept window |
 | `SKOLARA_WEBHOOK_SECRET` | yes | ≥ 32 bytes; shared with the payment provider signer |
 | `SKOLARA_CORS_ORIGINS` | yes | exact web origins, comma separated |
-| `SKOLARA_HTTP_ADDR` | no | default `:8080` |
+| `SKOLARA_HTTP_ADDR` | no | Bind address. Precedence: explicit `SKOLARA_HTTP_ADDR` > `PORT` (PaaS contract, e.g. Vercel's Go runtime) > `:8080` (issue #127) |
 | `SKOLARA_HTTP_TIMEOUT` | no | request timeout, default `30s` |
 | `SKOLARA_SHUTDOWN_PERIOD` | no | graceful drain window, default `15s` |
 | `SKOLARA_LOG_LEVEL` / `SKOLARA_LOG_FORMAT` | no | `info` / `json` in prod |

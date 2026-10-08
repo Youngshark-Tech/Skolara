@@ -14,8 +14,44 @@ func setEnv(t *testing.T, kv map[string]string) {
 	}
 }
 
+// TestLoadHTTPAddrBindsPortEnv pins the #127 binding precedence: explicit
+// SKOLARA_HTTP_ADDR > PORT (the PaaS contract — Vercel's Go runtime routes to
+// whatever the binary binds on $PORT) > :8080 for bare local runs.
+func TestLoadHTTPAddrBindsPortEnv(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/skolara_dev")
+	os.Unsetenv("SKOLARA_HTTP_ADDR")
+
+	t.Setenv("PORT", "3001")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.HTTPAddr != ":3001" {
+		t.Errorf("PORT=3001: addr = %q, want \":3001\"", cfg.HTTPAddr)
+	}
+
+	t.Setenv("SKOLARA_HTTP_ADDR", ":9090")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.HTTPAddr != ":9090" {
+		t.Errorf("SKOLARA_HTTP_ADDR=:9090: addr = %q, want \":9090\" (explicit wins over PORT)", cfg.HTTPAddr)
+	}
+
+	os.Unsetenv("SKOLARA_HTTP_ADDR")
+	os.Unsetenv("PORT")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.HTTPAddr != ":8080" {
+		t.Errorf("no env: addr = %q, want \":8080\"", cfg.HTTPAddr)
+	}
+}
+
 func TestLoadDefaultsDevelopment(t *testing.T) {
-	for _, k := range []string{"SKOLARA_ENV", "SKOLARA_JWT_SECRET", "SKOLARA_CORS_ORIGINS"} {
+	for _, k := range []string{"SKOLARA_ENV", "SKOLARA_JWT_SECRET", "SKOLARA_CORS_ORIGINS", "PORT"} {
 		os.Unsetenv(k)
 	}
 	t.Setenv("DATABASE_URL", "postgres://localhost/skolara_dev")
