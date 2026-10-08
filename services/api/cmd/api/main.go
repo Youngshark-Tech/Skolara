@@ -29,6 +29,7 @@ import (
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/middleware"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/observability"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/postgres"
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/signup"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/students"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/tenancy"
 	migrations "github.com/Roy-Wanyoike/Skolara/services/api/migrations"
@@ -120,7 +121,11 @@ func run() error {
 	idRepo := identity.NewRepo(pool)
 	jwtMgr := identity.NewJWTManager(cfg.JWTSecret, cfg.AccessTokenExpiry)
 	authSvc := identity.NewAuthService(idRepo, jwtMgr)
-	idHandler := identity.NewHandler(authSvc, jwtMgr, pool, cfg.IsProd(), cfg.CookieSameSiteAttr())
+	// Self-serve onboarding (issue #130): one tx provisioning user + education
+	// group + school + school_admin membership. The identity handler mounts
+	// POST /api/v1/auth/signup only when the workflow is wired.
+	signupSvc := signup.New(pool, idRepo, tenancy.NewRepo(pool))
+	idHandler := identity.NewHandler(authSvc, jwtMgr, pool, cfg.IsProd(), cfg.CookieSameSiteAttr(), signupSvc)
 
 	if err := bootstrapPlatformAdmin(ctx, authSvc, log); err != nil {
 		return fmt.Errorf("bootstrap admin: %w", err)

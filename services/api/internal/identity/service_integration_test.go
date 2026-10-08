@@ -508,12 +508,12 @@ func TestRefreshCookieHeadersOverHTTP(t *testing.T) {
 	}
 
 	// Default topology: SameSite=Lax (config default), no Secure (dev over HTTP).
-	res := login(NewHandler(svc, jwt, nil, false, http.SameSiteLaxMode))
+	res := login(NewHandler(svc, jwt, nil, false, http.SameSiteLaxMode, nil))
 	refresh := assertCookie(res, "Lax", "lax handler")
 
 	// The rotated cookie returned by /auth/refresh repeats the attributes.
 	refreshMux := http.NewServeMux()
-	NewHandler(svc, jwt, nil, false, http.SameSiteLaxMode).Register(refreshMux)
+	NewHandler(svc, jwt, nil, false, http.SameSiteLaxMode, nil).Register(refreshMux)
 	req := httptest.NewRequest("POST", "/api/v1/auth/refresh", strings.NewReader(`{}`))
 	req.AddCookie(&http.Cookie{Name: refreshCookieName, Value: refresh, Path: "/"})
 	rr := httptest.NewRecorder()
@@ -527,6 +527,6 @@ func TestRefreshCookieHeadersOverHTTP(t *testing.T) {
 	}
 
 	// Split-domain topology: operator sets SKOLARA_COOKIE_SAMESITE=none.
-	res = login(NewHandler(svc, jwt, nil, false, http.SameSiteNoneMode))
+	res = login(NewHandler(svc, jwt, nil, false, http.SameSiteNoneMode, nil))
 	assertCookie(res, "None", "none handler")
 }
