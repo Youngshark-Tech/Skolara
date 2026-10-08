@@ -44,6 +44,13 @@ Production-ready alpha for pilot onboarding — see the
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, and [docs/](docs/) for architecture and decision records.
 
+## Deployment
+
+The web app and Go API deploy together as one Vercel project (Vercel Services).
+See [docs/operations/DEPLOY_VERCEL.md](docs/operations/DEPLOY_VERCEL.md) for
+the environment-variable contract and a post-deploy smoke test. General
+operations are covered by the [runbook](docs/operations/RUNBOOK.md).
+
 ## License
 
 See [LICENSE](LICENSE).

@@ -58,8 +58,12 @@ func (c *Config) IsProd() bool { return c.Env == EnvProduction }
 // Load reads configuration from the environment, applying safe defaults for development.
 func Load() (*Config, error) {
 	c := &Config{
-		Env:                Environment(envOr("SKOLARA_ENV", "development")),
-		HTTPAddr:           envOr("SKOLARA_HTTP_ADDR", ":8080"),
+		Env: Environment(envOr("SKOLARA_ENV", "development")),
+		// HTTPAddr binding precedence (issue #127): an explicit
+		// SKOLARA_HTTP_ADDR always wins; otherwise honor the PORT env var
+		// (the contract used by Vercel's Go runtime, Fly.io, Heroku and most
+		// PaaS routers); fall back to :8080 for bare local runs.
+		HTTPAddr:           envOr("SKOLARA_HTTP_ADDR", ":"+envOr("PORT", "8080")),
 		HTTPTimeout:        durationOr("SKOLARA_HTTP_TIMEOUT", 30*time.Second),
 		ShutdownPeriod:     durationOr("SKOLARA_SHUTDOWN_PERIOD", 15*time.Second),
 		DatabaseURL:        envOr("DATABASE_URL", ""),
