@@ -51,6 +51,19 @@ See [docs/operations/DEPLOY_VERCEL.md](docs/operations/DEPLOY_VERCEL.md) for
 the environment-variable contract and a post-deploy smoke test. General
 operations are covered by the [runbook](docs/operations/RUNBOOK.md).
 
+### Demo mode
+
+Set `SKOLARA_DEMO_SEED=true` and a fresh deployment seeds an idempotent demo
+school with working login details:
+
+| Account | Email | Password |
+|---------|-------|----------|
+| School admin | `admin@skolara.dev` | `SkolaraDemo!2026` |
+| Teacher | `teacher@skolara.dev` | `SkolaraDemo!2026` |
+
+**Never enable demo mode on a deployment holding real data.** Full dataset
+description: [docs/operations/DEMO.md](docs/operations/DEMO.md).
+
 ## License
 
 See [LICENSE](LICENSE).

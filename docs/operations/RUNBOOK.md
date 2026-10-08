@@ -39,6 +39,8 @@ Operational guidance for running Skolara in production-like environments.
 | `SKOLARA_COOKIE_SAMESITE` | no | refresh-cookie `SameSite`: `lax` (default) / `strict` / `none` — split-domain hosting requires `none` + HTTPS (see §10) |
 | `SKOLARA_RATE_LIMIT_RPS` / `SKOLARA_RATE_LIMIT_BURST` | no | per-IP token bucket (evicts idle buckets; see #52) |
 | `SKOLARA_MAX_BODY_BYTES` | no | default 1 MiB |
+| `SKOLARA_DEMO_SEED` | no | `true` seeds the idempotent demo dataset (see [DEMO.md](DEMO.md)) — **never on real-data deployments** |
+| `SKOLARA_DEMO_PASSWORD` | no | Overrides the documented demo password for fresh seeds |
 | `SKOLARA_REDIS_ADDR` | no | **reserved, currently unused by the API** — compose keeps the service for the shared rate limiter on the roadmap |
 | `SKOLARA_BOOTSTRAP_ADMIN_EMAIL` / `_PASSWORD` | first boot only | create the first platform admin; disable afterwards |
 
