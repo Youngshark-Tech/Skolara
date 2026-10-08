@@ -19,6 +19,7 @@ import (
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/academics"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/assignments"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/attendance"
+	"github.com/Roy-Wanyoike/Skolara/services/api/internal/demo"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/finance"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/identity"
 	"github.com/Roy-Wanyoike/Skolara/services/api/internal/platform/config"
@@ -148,6 +149,23 @@ func run() error {
 	// Finance bounded context wiring (webhook route is public + HMAC-gated).
 	finSvc := finance.NewService(finance.NewRepo(pool), pool, cfg.WebhookSecret)
 	finHandler := finance.NewHandler(finSvc)
+
+	// Demo dataset (issue #128): idempotent demo school + staff accounts so a
+	// fresh deployment always has working login details. Opt-in via
+	// SKOLARA_DEMO_SEED=true; NEVER enable on a production deployment with
+	// real student data (demo credentials are public knowledge).
+	if cfg.DemoSeed {
+		log.Warn("DEMO MODE ENABLED: public demo credentials are active on this deployment — never use SKOLARA_DEMO_SEED on a deployment holding real student data")
+		if _, err := demo.Seed(ctx, demo.Deps{
+			Pool:      pool,
+			Identity:  authSvc,
+			Tenancy:   tenSvc,
+			Students:  stuSvc,
+			Academics: acaSvc,
+		}, cfg.DemoPassword, log); err != nil {
+			return fmt.Errorf("demo seed: %w", err)
+		}
+	}
 
 	// Effective permission set = platform roles (identity) ∪ active
 	// membership roles (tenancy). Wired here at the composition root so

@@ -51,6 +51,15 @@ type Config struct {
 	// hosting (web and API on different sites) requires "none" — which
 	// browsers only honor over HTTPS, i.e. Secure cookies in production.
 	CookieSameSite string
+
+	// DemoSeed (SKOLARA_DEMO_SEED=true) enables the idempotent demo dataset
+	// (issue #128): demo school + staff accounts so a fresh deployment always
+	// has working login details. NEVER enable on a production deployment that
+	// holds real student data — demo credentials are public knowledge.
+	DemoSeed bool
+	// DemoPassword overrides the public default demo password
+	// (demo.DefaultPassword) for the seeded accounts.
+	DemoPassword string
 }
 
 func (c *Config) IsProd() bool { return c.Env == EnvProduction }
@@ -78,6 +87,8 @@ func Load() (*Config, error) {
 		RateLimitBurst:     intOr("SKOLARA_RATE_LIMIT_BURST", 40),
 		MaxBodyBytes:       int64Or("SKOLARA_MAX_BODY_BYTES", 1<<20), // 1 MiB
 		CookieSameSite:     strings.ToLower(strings.TrimSpace(envOr("SKOLARA_COOKIE_SAMESITE", "lax"))),
+		DemoSeed:           envOr("SKOLARA_DEMO_SEED", "") == "true",
+		DemoPassword:       os.Getenv("SKOLARA_DEMO_PASSWORD"),
 	}
 
 	switch c.Env {

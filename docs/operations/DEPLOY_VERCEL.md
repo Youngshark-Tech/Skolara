@@ -51,6 +51,8 @@ Set for **Production** (and Preview if you want preview deploys to work):
 | `SKOLARA_WEBHOOK_SECRET` | ≥ 32 random bytes | Payment-webhook HMAC (config validation requires it in production). |
 | `SKOLARA_CORS_ORIGINS` | `https://<your-app>.vercel.app` | Same-origin traffic needs no CORS, but production config validation requires a non-localhost origin list; also covers any split-origin callers. |
 | `SKOLARA_BOOTSTRAP_ADMIN_EMAIL` / `SKOLARA_BOOTSTRAP_ADMIN_PASSWORD` | your operator credentials | Creates the first platform admin at boot (only when the users table is empty). |
+| `SKOLARA_DEMO_SEED` | `true` (optional) | Seeds the idempotent demo dataset (demo school + staff accounts — see [DEMO.md](DEMO.md)). **Never enable on a deployment holding real data.** |
+| `SKOLARA_DEMO_PASSWORD` | optional | Overrides the documented demo password for freshly seeded accounts. |
 | `NEXT_PUBLIC_API_URL` | leave unset | Unset = same-origin (`""`), which is correct for this topology. Set it only if you split the API onto its own domain. |
 
 Notes:
@@ -80,6 +82,10 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 
 Then open `https://<your-app>.vercel.app` — the app should render, and signing
 in with your bootstrap-admin credentials should land you in the workspace.
+
+With `SKOLARA_DEMO_SEED=true` you can also sign in with the public demo
+accounts (`admin@skolara.dev` / `SkolaraDemo!2026` — full list in
+[DEMO.md](DEMO.md)).
 
 ## 4. Troubleshooting
 
