@@ -11,14 +11,26 @@ detached to the most production-like:
 
 All are temporary and demo-only — see the security envelope at the bottom.
 
+> **Zero-config default (issue #153, temporary):** a web build with **no
+> `NEXT_PUBLIC_DEMO_MODE` value** ships demo data mode — a fresh deployment is
+> a working demo with no configuration at all. An explicit value always wins:
+> `NEXT_PUBLIC_DEMO_MODE=false` is the go-live switch (real API + database);
+> unsetting the flag hands the deployment back to the demo, so production
+> cutovers must SET it to `false`, not merely remove it.
+
 ## Demo data mode (no database at all)
 
 For product demos and staging reviews before the database is provisioned, the
 web app can run ENTIRELY on an in-memory sample dataset (issue #142):
 
 ```bash
-# Web app only — this is the ONLY required change (build-time, REDEPLOY after):
+# Web app — DEFAULT since issue #153: a build with the variable UNSET ships
+# demo data mode. Set it explicitly to be unambiguous (build-time, REDEPLOY
+# after any change):
 NEXT_PUBLIC_DEMO_MODE=true
+
+# Go live (real API + database) — the explicit off switch:
+NEXT_PUBLIC_DEMO_MODE=false
 ```
 
 What changes:
@@ -150,10 +162,11 @@ three times against a live PostgreSQL and asserts exact object counts.
 > configuration discipline, so review the environment variables before every
 > production cutover.
 >
-> **Returning to full production:** unset `NEXT_PUBLIC_DEMO_MODE` and
-> `NEXT_PUBLIC_AUTH_BYPASS` on the web app, keep `SKOLARA_DEMO_SEED` unset on
-> the API, and redeploy. No code changes are involved — the switches exist
-> only in configuration.
+> **Returning to full production:** set `NEXT_PUBLIC_DEMO_MODE=false` on the
+> web app (do NOT merely unset it — since #153 an unset flag means the demo
+> default applies) and unset `NEXT_PUBLIC_AUTH_BYPASS`, keep
+> `SKOLARA_DEMO_SEED` unset on the API, and redeploy. No code changes are
+> involved — the switches exist only in configuration.
 
 ## Removing demo data
 
