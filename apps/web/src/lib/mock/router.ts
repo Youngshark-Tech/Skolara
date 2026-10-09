@@ -24,6 +24,7 @@ import {
   createEnrollment,
   createLearner,
   currentDemoUser,
+  getAttendanceRegister,
   getVisibleLearner,
   listEnrollments,
   listInvoices,
@@ -32,6 +33,7 @@ import {
   mockSignup,
   nextMockToken,
   transitionEnrollment,
+  upsertAttendance,
   wallet,
 } from "./store";
 
@@ -230,6 +232,28 @@ function route(req: MockRequest): MockResponseLike {
       offset: intParam(query.get("offset"), 0),
     });
     return jsonResponse(200, page);
+  }
+
+  // ------------------------------------------------------------------------
+  // attendance (#189)
+
+  if (rest[0] === "attendance" && rest.length === 1) {
+    if (method === "GET") {
+      const date = query.get("date") ?? "";
+      const classGroupId = query.get("classGroupId") ?? "";
+      try {
+        return jsonResponse(200, getAttendanceRegister(date, classGroupId));
+      } catch (err) {
+        return mockError(err);
+      }
+    }
+    if (method === "POST") {
+      try {
+        return jsonResponse(200, upsertAttendance(req.body));
+      } catch (err) {
+        return mockError(err);
+      }
+    }
   }
 
   return errorEnvelope(404, "not_found", `mock: no route for ${method} ${path}`);

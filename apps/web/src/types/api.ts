@@ -119,3 +119,38 @@ export interface InvoicePage {
   limit: number;
   offset: number;
 }
+
+/**
+ * Attendance mark for one learner on one register (issue #189). The closed
+ * four-status set mirrors what the API domain registers behind the
+ * `attendance.record` permission.
+ */
+export type AttendanceStatus = "present" | "absent" | "late" | "excused";
+
+/** One learner's mark inside a register. */
+export interface AttendanceRecord {
+  learnerId: string;
+  status: AttendanceStatus;
+  recordedAt: string;
+}
+
+/** GET /api/v1/attendance?date=YYYY-MM-DD&classGroupId=... response. */
+export interface AttendanceRegister {
+  date: string;
+  classGroupId: string;
+  records: AttendanceRecord[];
+  total: number;
+}
+
+/** One entry of a POST /api/v1/attendance upsert. */
+export interface AttendanceEntry {
+  learnerId: string;
+  status: AttendanceStatus;
+}
+
+/** POST /api/v1/attendance request body (idempotent per date+class+learner). */
+export interface AttendanceUpsert {
+  date: string;
+  classGroupId: string;
+  entries: AttendanceEntry[];
+}
