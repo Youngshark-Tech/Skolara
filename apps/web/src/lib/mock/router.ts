@@ -21,11 +21,13 @@ import {
   MockApiError,
   academicYears,
   classGroups,
+  createAssignment,
   createEnrollment,
   createLearner,
   currentDemoUser,
   getAttendanceRegister,
   getVisibleLearner,
+  listAssignments,
   listEnrollments,
   listInvoices,
   listVisibleLearners,
@@ -250,6 +252,30 @@ function route(req: MockRequest): MockResponseLike {
     if (method === "POST") {
       try {
         return jsonResponse(200, upsertAttendance(req.body));
+      } catch (err) {
+        return mockError(err);
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // assignments (#190)
+
+  if (rest[0] === "assignments" && rest.length === 1) {
+    if (method === "GET") {
+      return jsonResponse(
+        200,
+        listAssignments({
+          classGroupId: query.get("classGroupId") ?? undefined,
+          status: query.get("status") ?? undefined,
+          limit: intParam(query.get("limit"), 20),
+          offset: intParam(query.get("offset"), 0),
+        }),
+      );
+    }
+    if (method === "POST") {
+      try {
+        return jsonResponse(201, createAssignment(req.body));
       } catch (err) {
         return mockError(err);
       }
