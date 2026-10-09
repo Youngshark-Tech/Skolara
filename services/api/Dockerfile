@@ -2,9 +2,9 @@
 # Build context: repository root (matches infrastructure/docker-compose.yml)
 #   docker build -f services/api/Dockerfile .
 
-# golang:1.25.13-alpine matches the toolchain directive in go.mod (issue #101):
+# golang:1.26.9-alpine matches the go.mod toolchain (issues #101, #143):
 # pinning the PATCH keeps image builds reproducible.
-FROM golang:1.25.13-alpine AS build
+FROM golang:1.26.9-alpine AS build
 WORKDIR /src
 
 # Layer-cached dependency resolution
