@@ -4,6 +4,7 @@ import {
   REFRESH_COOKIE_NAME,
   decideAuth,
 } from "@/lib/auth-cookies";
+import { authBypassEnabled } from "@/lib/auth-bypass";
 
 /**
  * Edge auth guard (proxy — Next 16 renamed middleware.ts -> proxy.ts) (ADR-008 §Auth / ADR-011): protected paths require evidence
@@ -15,8 +16,14 @@ import {
  * Evidence accepted: the API's HttpOnly refresh cookie (`skolara_refresh`, set
  * by services/api/internal/identity/http.go) or the web-origin session-hint
  * cookie (`skolara_auth_hint`, no secret value — see lib/session.tsx).
+ *
+ * Open-access mode (#141): when NEXT_PUBLIC_AUTH_BYPASS=true the guard steps
+ * aside entirely — the session provider establishes a real demo session on
+ * boot (lib/session.tsx), so the API's validation is never skipped.
  */
 export default function proxy(request: NextRequest) {
+  if (authBypassEnabled()) return NextResponse.next();
+
   const { pathname } = request.nextUrl;
   const decision = decideAuth(
     pathname,

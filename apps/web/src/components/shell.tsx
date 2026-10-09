@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useSession } from "@/lib/session";
 import { visibleNav, type NavEntry } from "@/lib/permissions";
 import { Badge } from "@/components/ui";
+import { authBypassEnabled, mockDataEnabled } from "@/lib/auth-bypass";
 
 /**
  * Role-aware application shell (#57): navigation is filtered by the session's
@@ -91,6 +92,10 @@ function SchoolSwitcher({ idSuffix }: { idSuffix: string }) {
 
 function SignOutButton({ className = "" }: { className?: string }) {
   const { logout } = useSession();
+  // Open-access mode (#141): signing out would instantly auto-relogin via the
+  // session boot, so the control is hidden while the bypass is active
+  // (documented in docs/operations/DEMO.md).
+  if (authBypassEnabled()) return null;
   return (
     <button
       type="button"
@@ -166,6 +171,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <div className="border-b border-slate-200 px-5 py-4">
           <p className="text-lg font-bold text-primary">Skolara</p>
           <p className="text-xs text-slate-500">The Operating System for Schools</p>
+          {/* Issue #142: make the sample-data mode visible so no one mistakes
+              mock numbers (wallet, invoices, learners) for live figures. */}
+          {mockDataEnabled() && (
+            <p className="mt-2">
+              <Badge tone="amber">
+                <span className="sr-only">Deployment mode: </span>Demo data — not live
+              </Badge>
+            </p>
+          )}
         </div>
 
         <div className="border-b border-slate-200 px-4 py-3">

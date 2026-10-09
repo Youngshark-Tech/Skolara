@@ -53,8 +53,16 @@ operations are covered by the [runbook](docs/operations/RUNBOOK.md).
 
 ### Demo mode
 
-Set `SKOLARA_DEMO_SEED=true` and a fresh deployment seeds an idempotent demo
-school with working login details:
+Three postures are available (all temporary, demo-only — see
+[docs/operations/DEMO.md](docs/operations/DEMO.md)):
+
+| Mode | Flag | Needs database? |
+|------|------|-----------------|
+| Demo data (in-memory sample dataset, no DB at all) | web: `NEXT_PUBLIC_DEMO_MODE=true` | **No** |
+| Open access (auto sign-in as the demo admin) | web: `NEXT_PUBLIC_AUTH_BYPASS=true` + api: `SKOLARA_DEMO_SEED=true` | Yes |
+| Standard demo seed (normal login) | api: `SKOLARA_DEMO_SEED=true` | Yes |
+
+The standard seed provisions:
 
 | Account | Email | Password |
 |---------|-------|----------|
@@ -62,7 +70,8 @@ school with working login details:
 | Teacher | `teacher@skolara.dev` | `SkolaraDemo!2026` |
 
 **Never enable demo mode on a deployment holding real data.** Full dataset
-description: [docs/operations/DEMO.md](docs/operations/DEMO.md).
+description and the production cutover procedure:
+[docs/operations/DEMO.md](docs/operations/DEMO.md).
 
 ## License
 
