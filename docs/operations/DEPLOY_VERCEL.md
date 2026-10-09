@@ -52,7 +52,7 @@ Set for **Production** (and Preview if you want preview deploys to work):
 
 | Variable | Value | Why |
 |----------|-------|-----|
-| `DATABASE_URL` | `postgres://user:pass@host/db?sslmode=require` | Required. Use a managed Postgres (Neon, Supabase, RDS). The API applies embedded migrations at boot. |
+| `DATABASE_URL` | `postgres://user:pass@host/db?sslmode=require` | Required. Use a managed Postgres — **Vercel Postgres (Neon) for the demo, Supabase for production** (ADR-012): Vercel's pooled connection string works as-is; on Supabase prefer the session pooler (port 5432), or the transaction pooler (6543) with `&default_query_exec_mode=simple_protocol`. The API applies embedded migrations at boot. |
 | `SKOLARA_ENV` | `production` | Enables strict config validation. |
 | `SKOLARA_JWT_SECRET` | ≥ 32 random bytes | Signs access tokens. Generate: `openssl rand -base64 48`. |
 | `SKOLARA_WEBHOOK_SECRET` | ≥ 32 random bytes | Payment-webhook HMAC (config validation requires it in production). |

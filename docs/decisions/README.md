@@ -16,5 +16,7 @@ Skolara records every significant architectural decision as an ADR (master spec 
 | [ADR-008](ADR-008-web-frontend.md) | Web — Next.js, Tailwind, shadcn-style UI, TanStack Query | Accepted |
 | [ADR-009](ADR-009-offline-first.md) | Offline-First Strategy | Accepted |
 | [ADR-010](ADR-010-ai-gateway.md) | AI Gateway — Provider-Agnostic, Recommend-Only | Accepted |
+| [ADR-011](ADR-011-web-token-memory-silent-refresh.md) | Web Tokens in Memory + Silent Refresh | Accepted |
+| [ADR-012](ADR-012-managed-postgres-demo-production.md) | Managed Postgres — Vercel Postgres (Neon) for Demo, Supabase for Production | Accepted |
 
 **Process:** to change architecture, open an issue referencing the ADR, propose a new ADR (superseding the old one), and land it via PR. ADRs are never edited silently.
