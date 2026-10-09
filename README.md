@@ -29,6 +29,12 @@ Production-ready alpha for pilot onboarding — see the
 [QA report](docs/qa/QA_REPORT.md), [runbook](docs/operations/RUNBOOK.md), and
 [roadmap](docs/operations/ROADMAP.md).
 
+**Zero-config demo (temporary, #153):** a web build with no
+`NEXT_PUBLIC_DEMO_MODE` set ships as a working demo — open access, in-memory
+sample data, no database needed. Going live is explicit: set
+`NEXT_PUBLIC_DEMO_MODE=false` + `DATABASE_URL` on the API and redeploy
+([DEPLOY_VERCEL.md](docs/operations/DEPLOY_VERCEL.md)).
+
 ## Key Principles
 
 1. **Domain ownership** — every piece of data has one authoritative owner

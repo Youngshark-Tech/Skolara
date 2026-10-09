@@ -17,6 +17,13 @@ first-party traffic.
                                         [PostgreSQL 17] (e.g. Neon/Supabase)
 ```
 
+> **Zero-configuration deployments are demos by default** (issue #153, temporary):
+> if `NEXT_PUBLIC_DEMO_MODE` is **unset** at build time, `next.config.mjs` injects
+> demo data mode — the web app runs on the in-memory sample dataset with open
+> access, no database and no API service needed. An **explicit** value always
+> wins: set `NEXT_PUBLIC_DEMO_MODE=false` (+ `DATABASE_URL` on the api service)
+> to go live, and redeploy. See [DEMO.md](DEMO.md) for the full mode matrix.
+
 ## 1. Project setup
 
 1. Import the repository into Vercel. Vercel reads the root `vercel.json`
@@ -54,7 +61,7 @@ Set for **Production** (and Preview if you want preview deploys to work):
 | `SKOLARA_DEMO_SEED` | `true` (optional) | Seeds the idempotent demo dataset (demo school + staff accounts — see [DEMO.md](DEMO.md)). **Never enable on a deployment holding real data.** |
 | `SKOLARA_DEMO_PASSWORD` | optional | Overrides the documented demo password for freshly seeded accounts. |
 | `NEXT_PUBLIC_API_URL` | leave unset | Unset = same-origin (`""`), which is correct for this topology. Set it only if you split the API onto its own domain. |
-| `NEXT_PUBLIC_DEMO_MODE` | `true` (optional, temporary) | **Demo data mode (issue #142): the web app runs entirely on the in-memory sample dataset — no database, no API service needed.** Implies `NEXT_PUBLIC_AUTH_BYPASS`. Build-time: change → redeploy. **Never with real data** — see [DEMO.md](DEMO.md). |
+| `NEXT_PUBLIC_DEMO_MODE` | unset (default) = **demo ON** · `false` = go-live | **Demo data mode (issues #142, #153): a build with NO value ships the zero-config demo — the web app runs entirely on the in-memory sample dataset, no database, no API service needed.** Set `false` for production (real API + database). Implies `NEXT_PUBLIC_AUTH_BYPASS`. Build-time: change → redeploy. **Never leave unset/`true` on a deployment holding real data** — see [DEMO.md](DEMO.md). |
 | `NEXT_PUBLIC_AUTH_BYPASS` | `true` (optional, temporary) | Open-access mode (issue #141): disables the login surface — visitors are signed in automatically as the demo admin. Requires `SKOLARA_DEMO_SEED=true` on the API. **Build-time**: change it → redeploy. **Never on a deployment holding real data** — see [DEMO.md](DEMO.md). |
 | `NEXT_PUBLIC_BYPASS_EMAIL` / `NEXT_PUBLIC_BYPASS_PASSWORD` | optional | Open-access credential overrides — must match what the API seeded (`SKOLARA_DEMO_PASSWORD`). Defaults to the documented demo pair. |
 
@@ -102,6 +109,6 @@ in-memory sample dataset — the lightest possible demo deployment.
 | `404` from `/api/v1/...` with a JSON `not_found` envelope | The request **reached** the Go API but no route matched — the rewrite prefix was likely changed; restore `/api/(.*)`. |
 | Config error mentioning `SKOLARA_CORS_ORIGINS` in production | Set it to your deployment origin (see table above). |
 | Session lost after ~15 min | Cookies blocked — verify you are testing on the deployment domain itself, not an embedded iframe. |
-| Every visitor lands in the demo admin workspace | `NEXT_PUBLIC_AUTH_BYPASS=true` is set (open-access mode #141) — remove it and redeploy to restore normal authentication. |
-| Sidebar shows "Demo data — not live", figures reset on reload | `NEXT_PUBLIC_DEMO_MODE=true` (demo data mode #142) — remove it, add `DATABASE_URL` to the api service, and redeploy to connect the real database (migrations run automatically at boot). |
+| Every visitor lands in the demo admin workspace | Demo mode is active — either `NEXT_PUBLIC_DEMO_MODE=true` or (issue #153 default) the variable is **unset** at build time. Set `NEXT_PUBLIC_DEMO_MODE=false` and redeploy to restore normal authentication. |
+| Sidebar shows "Demo data — not live", figures reset on reload | Demo data mode (#142/#153) — set `NEXT_PUBLIC_DEMO_MODE=false`, add `DATABASE_URL` to the api service, and redeploy to connect the real database (migrations run automatically at boot). |
 | Automatic demo sign-in fails with `invalid_credentials` | The web flag is on but the API has no demo users — set `SKOLARA_DEMO_SEED=true` on the api service (or match `NEXT_PUBLIC_BYPASS_PASSWORD` to `SKOLARA_DEMO_PASSWORD`) and redeploy both. |
