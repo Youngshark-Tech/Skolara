@@ -270,3 +270,220 @@ describe("transport semantics", () => {
     expect(admitted.enrollments.every((e) => e.status === ("admitted" as EnrollmentStatus))).toBe(true);
   });
 });
+
+describe("attendance register (#189)", () => {
+  const DATE = "2026-03-06";
+  const CLASS_8B = "cls-demo-8b";
+
+  it("seeds a register for today with every learner non-terminally enrolled in the class", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const register = await call<{
+      date: string;
+      classGroupId: string;
+      records: Array<{ learnerId: string; status: string; recordedAt: string }>;
+      total: number;
+    }>("GET", `/api/v1/attendance?date=${today}&classGroupId=${CLASS_8B}`);
+
+    expect(register.date).toBe(today);
+    expect(register.total).toBe(4); // learners 1, 2, 3, 5 — the 8B roster
+    const statuses = register.records.map((r) => r.status).sort();
+    expect(statuses).toEqual(["absent", "late", "present", "present"]);
+    for (const r of register.records) {
+      expect(r.recordedAt).toBeTruthy();
+    }
+  });
+
+  it("returns an empty register (not an error) for a date never taken", async () => {
+    const register = await call<{ records: unknown[]; total: number }>(
+      "GET",
+      `/api/v1/attendance?date=2030-01-01&classGroupId=${CLASS_8B}`,
+    );
+    expect(register.total).toBe(0);
+    expect(register.records).toEqual([]);
+  });
+
+  it("upserts marks idempotently — re-saving replaces in place, never duplicates", async () => {
+    await call("POST", "/api/v1/attendance", {
+      date: DATE,
+      classGroupId: CLASS_8B,
+      entries: [{ learnerId: "lrn-demo-001", status: "late" }],
+    });
+    const second = await call<{
+      records: Array<{ learnerId: string; status: string; recordedAt: string }>;
+      total: number;
+    }>("POST", "/api/v1/attendance", {
+      date: DATE,
+      classGroupId: CLASS_8B,
+      entries: [{ learnerId: "lrn-demo-001", status: "present" }],
+    });
+
+    expect(second.total).toBe(1);
+    expect(second.records).toHaveLength(1);
+    expect(second.records[0]).toMatchObject({ learnerId: "lrn-demo-001", status: "present" });
+    expect(second.records[0]!.recordedAt).toBeTruthy();
+
+    const fetched = await call<{ total: number }>(
+      "GET",
+      `/api/v1/attendance?date=${DATE}&classGroupId=${CLASS_8B}`,
+    );
+    expect(fetched.total).toBe(1);
+  });
+
+  it("validates like the API will: bad date, unknown class, unknown learner, bad status, empty entries", async () => {
+    await expect(
+      call("POST", "/api/v1/attendance", {
+        date: "06/03/2026",
+        classGroupId: CLASS_8B,
+        entries: [{ learnerId: "lrn-demo-001", status: "present" }],
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "validation_error" });
+
+    await expect(
+      call("POST", "/api/v1/attendance", {
+        date: DATE,
+        classGroupId: "cls-ghost",
+        entries: [{ learnerId: "lrn-demo-001", status: "present" }],
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "validation_error" });
+
+    await expect(
+      call("POST", "/api/v1/attendance", {
+        date: DATE,
+        classGroupId: CLASS_8B,
+        entries: [{ learnerId: "lrn-ghost", status: "present" }],
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "validation_error" });
+
+    await expect(
+      call("POST", "/api/v1/attendance", {
+        date: DATE,
+        classGroupId: CLASS_8B,
+        entries: [{ learnerId: "lrn-demo-001", status: "sleeping" }],
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "validation_error" });
+
+    await expect(
+      call("POST", "/api/v1/attendance", { date: DATE, classGroupId: CLASS_8B, entries: [] }),
+    ).rejects.toMatchObject({ status: 400, code: "validation_error" });
+  });
+
+  it("rejects learners not bound to the class (409 not_enrolled) and terminal enrollments", async () => {
+    // Learner 9 is withdrawn (terminal) — never markable even historically.
+    await expect(
+      call("POST", "/api/v1/attendance", {
+        date: DATE,
+        classGroupId: CLASS_8B,
+        entries: [{ learnerId: "lrn-demo-009", status: "present" }],
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "not_enrolled" });
+
+    // Learner 11 is enrolled but in 9G, not 8B.
+    await expect(
+      call("POST", "/api/v1/attendance", {
+        date: DATE,
+        classGroupId: CLASS_8B,
+        entries: [{ learnerId: "lrn-demo-011", status: "present" }],
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "not_enrolled" });
+  });
+
+  it("validates GET query params the same way", async () => {
+    await expect(
+      call("GET", "/api/v1/attendance?date=bad&classGroupId=cls-demo-8b"),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      call("GET", "/api/v1/attendance?date=2026-03-06&classGroupId=cls-ghost"),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+});
+
+describe("assignment work book (#190)", () => {
+  it("seeds six assignments across both classes with a realistic overdue mix", async () => {
+    const page = await call<{
+      assignments: Array<{ id: string; classGroupId: string; dueDate: string }>;
+      total: number;
+    }>("GET", "/api/v1/assignments?limit=50");
+
+    expect(page.total).toBe(6);
+    const classes = new Set(page.assignments.map((a) => a.classGroupId));
+    expect(classes.has("cls-demo-8b")).toBe(true);
+    expect(classes.has("cls-demo-9g")).toBe(true);
+
+    // Sorted by due date ascending.
+    const dates = page.assignments.map((a) => a.dueDate);
+    expect([...dates].sort()).toEqual(dates);
+  });
+
+  it("derives the overdue filter from the due date, never a stored flag", async () => {
+    const overdue = await call<{ assignments: unknown[]; total: number }>(
+      "GET",
+      "/api/v1/assignments?status=overdue&limit=50",
+    );
+    expect(overdue.total).toBe(2); // the two past-due seeds
+    const open = await call<{ total: number }>(
+      "GET",
+      "/api/v1/assignments?status=open&limit=50",
+    );
+    expect(open.total).toBe(4);
+  });
+
+  it("filters by class group", async () => {
+    const eightBlue = await call<{ assignments: unknown[]; total: number }>(
+      "GET",
+      "/api/v1/assignments?classGroupId=cls-demo-8b&limit=50",
+    );
+    expect(eightBlue.total).toBe(3);
+  });
+
+  it("creates an assignment and it lands in the book", async () => {
+    const created = await call<{ id: string; title: string; dueDate: string }>(
+      "POST",
+      "/api/v1/assignments",
+      {
+        title: "Reading log week 6",
+        classGroupId: "cls-demo-9g",
+        subject: "English",
+        dueDate: "2030-06-30",
+      },
+    );
+    expect(created.id).toBeTruthy();
+    expect(created.title).toBe("Reading log week 6");
+
+    const page = await call<{ total: number }>("GET", "/api/v1/assignments?limit=50");
+    expect(page.total).toBe(7);
+  });
+
+  it("validates creation like the API will: short title, ghost class, bad date", async () => {
+    await expect(
+      call("POST", "/api/v1/assignments", {
+        title: "ab",
+        classGroupId: "cls-demo-9g",
+        dueDate: "2030-06-30",
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "validation_error" });
+
+    await expect(
+      call("POST", "/api/v1/assignments", {
+        title: "Valid title",
+        classGroupId: "cls-ghost",
+        dueDate: "2030-06-30",
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "validation_error" });
+
+    await expect(
+      call("POST", "/api/v1/assignments", {
+        title: "Valid title",
+        classGroupId: "cls-demo-9g",
+        dueDate: "30/06/2030",
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "validation_error" });
+
+    await expect(
+      call("POST", "/api/v1/assignments", {
+        title: "Valid title",
+        classGroupId: "cls-demo-9g",
+        dueDate: "2030-02-30",
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "validation_error" });
+  });
+});

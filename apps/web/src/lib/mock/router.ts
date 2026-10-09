@@ -21,10 +21,13 @@ import {
   MockApiError,
   academicYears,
   classGroups,
+  createAssignment,
   createEnrollment,
   createLearner,
   currentDemoUser,
+  getAttendanceRegister,
   getVisibleLearner,
+  listAssignments,
   listEnrollments,
   listInvoices,
   listVisibleLearners,
@@ -32,6 +35,7 @@ import {
   mockSignup,
   nextMockToken,
   transitionEnrollment,
+  upsertAttendance,
   wallet,
 } from "./store";
 
@@ -230,6 +234,52 @@ function route(req: MockRequest): MockResponseLike {
       offset: intParam(query.get("offset"), 0),
     });
     return jsonResponse(200, page);
+  }
+
+  // ------------------------------------------------------------------------
+  // attendance (#189)
+
+  if (rest[0] === "attendance" && rest.length === 1) {
+    if (method === "GET") {
+      const date = query.get("date") ?? "";
+      const classGroupId = query.get("classGroupId") ?? "";
+      try {
+        return jsonResponse(200, getAttendanceRegister(date, classGroupId));
+      } catch (err) {
+        return mockError(err);
+      }
+    }
+    if (method === "POST") {
+      try {
+        return jsonResponse(200, upsertAttendance(req.body));
+      } catch (err) {
+        return mockError(err);
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // assignments (#190)
+
+  if (rest[0] === "assignments" && rest.length === 1) {
+    if (method === "GET") {
+      return jsonResponse(
+        200,
+        listAssignments({
+          classGroupId: query.get("classGroupId") ?? undefined,
+          status: query.get("status") ?? undefined,
+          limit: intParam(query.get("limit"), 20),
+          offset: intParam(query.get("offset"), 0),
+        }),
+      );
+    }
+    if (method === "POST") {
+      try {
+        return jsonResponse(201, createAssignment(req.body));
+      } catch (err) {
+        return mockError(err);
+      }
+    }
   }
 
   return errorEnvelope(404, "not_found", `mock: no route for ${method} ${path}`);

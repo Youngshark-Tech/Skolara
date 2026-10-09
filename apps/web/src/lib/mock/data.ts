@@ -12,28 +12,21 @@
  */
 import type {
   AcademicYear,
+  Assignment,
+  AttendanceStatus,
   ClassGroup,
   Enrollment,
   EnrollmentStatus,
+  Invoice,
   Learner,
+  WalletBalance,
 } from "@/types/api";
 
 export const DEMO_SCHOOL_ID = "school-demo-rvs001";
 
-export interface WalletBalance {
-  purpose: string;
-  balanceMinor: number;
-  currency: string;
-}
-
-export interface Invoice {
-  id: string;
-  learnerId: string;
-  status: "open" | "paid" | "void";
-  amountMinor: number;
-  currency: string;
-  dueDate: string;
-}
+// Contract types live in types/api.ts (openapi.yaml is the source of truth);
+// the demo dataset re-exports them so store/router imports stay stable.
+export type { Invoice, WalletBalance };
 
 export interface DemoUser {
   id: string;
@@ -189,3 +182,68 @@ export const SEED_INVOICES: Invoice[] = [
   { id: "inv-demo-005", learnerId: "lrn-demo-005", status: "paid", amountMinor: 1850000, currency: "KES", dueDate: "2026-02-01" },
   { id: "inv-demo-006", learnerId: "lrn-demo-009", status: "void", amountMinor: 925000, currency: "KES", dueDate: "2026-02-01" },
 ];
+
+/**
+ * Seed roll calls for TODAY (issue #189) so the attendance workspace shows a
+ * living register on first visit. Every seeded learner holds a non-terminal
+ * enrollment bound to their class — the same rule upsertAttendance enforces.
+ * Dates arrive from the store (computed once at state creation) so the demo
+ * never shows a stale register; tests pass explicit dates instead.
+ */
+export interface SeedAttendanceRow {
+  date: string;
+  classGroupId: string;
+  learnerId: string;
+  status: AttendanceStatus;
+}
+
+export function seedAttendance(today: string): SeedAttendanceRow[] {
+  const rows: Array<[number, string, AttendanceStatus]> = [
+    // Grade 8 - Blue: two active, one admitted, one suspended.
+    [1, "cls-demo-8b", "present"],
+    [2, "cls-demo-8b", "present"],
+    [3, "cls-demo-8b", "late"],
+    [5, "cls-demo-8b", "absent"],
+    // Grade 9 - Green: transfer_pending, active, admitted.
+    [6, "cls-demo-9g", "present"],
+    [11, "cls-demo-9g", "excused"],
+    [12, "cls-demo-9g", "absent"],
+  ];
+  return rows.map(([n, classGroupId, status]) => ({
+    date: today,
+    classGroupId,
+    learnerId: `lrn-demo-${String(n).padStart(3, "0")}`,
+    status,
+  }));
+}
+
+/**
+ * Seed assignments (#190) around TODAY so the work book always shows a
+ * realistic mix: two overdue, one due within days, the rest upcoming —
+ * across both classes and several subjects, one without a subject.
+ */
+export function seedAssignments(today: string): Assignment[] {
+  const dayOffset = (days: number): string => {
+    const d = new Date(`${today}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  };
+  const at = (days: number, time: string): string => `${dayOffset(days)}T${time}`;
+  const rows: Array<[string, string, string | undefined, string | undefined, number]> = [
+    ["Algebra worksheet 4", "cls-demo-8b", "Mathematics", "Factorising quadratics, questions 1–15.", -7],
+    ["Composition: My community", "cls-demo-8b", "English", "One page, handwritten draft due.", -3],
+    ["Photosynthesis practical write-up", "cls-demo-9g", "Biology", "Record observations from the lab session.", 2],
+    ["Map work: Kenyan counties", "cls-demo-8b", undefined, "Label the outline map provided in class.", 5],
+    ["Physics problem set: forces", "cls-demo-9g", "Physics", "Show all working; SI units required.", 10],
+    ["Kiswahili insha: Sikujua", "cls-demo-9g", "Kiswahili", undefined, 1],
+  ];
+  return rows.map(([title, classGroupId, subject, description, due], i) => ({
+    id: `asg-demo-${String(i + 1).padStart(3, "0")}`,
+    title,
+    description,
+    classGroupId,
+    subject,
+    dueDate: dayOffset(due),
+    createdAt: at(due - 14, "09:00:00Z"),
+  }));
+}
