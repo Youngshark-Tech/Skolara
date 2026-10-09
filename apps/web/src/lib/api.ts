@@ -11,7 +11,17 @@
  * already-rotated refresh token and trip family revocation). Tenant context is
  * sent via X-School-ID (server derives it from the verified session, never
  * payloads).
+ *
+ * Demo data mode (issue #142): when NEXT_PUBLIC_DEMO_MODE=true this client
+ * never touches the network — every call is answered by the in-memory mock
+ * transport (lib/mock) which mirrors the real API contract, so the app runs
+ * with NO database and NO API service. Flipping the flag off returns the
+ * client to the real fetch path byte-for-byte.
  */
+
+import { ApiError } from "./api-error";
+import { mockDataEnabled } from "./auth-bypass";
+import { mockApiRequest } from "./mock/router";
 
 /**
  * Resolve the API base URL (issue #127):
@@ -69,17 +79,7 @@ export function setSchoolId(id: string | null): void {
   else window.localStorage.removeItem(SCHOOL_KEY);
 }
 
-export class ApiError extends Error {
-  readonly status: number;
-  readonly code: string;
-
-  constructor(status: number, code: string, message: string) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-    this.code = code;
-  }
-}
+export { ApiError } from "./api-error";
 
 export interface RequestOptions {
   method?: string;
@@ -139,7 +139,23 @@ async function doRefresh(): Promise<RefreshOutcome> {
 
 export function refreshSession(): Promise<RefreshOutcome> {
   if (!refreshInFlight) {
-    refreshInFlight = doRefresh().finally(() => {
+    // Demo data mode (#142): the mock transport always re-issues a session,
+    // so the boot never sees an "unauthenticated" outcome and no cookie is
+    // needed — the demo session simply persists across reloads.
+    refreshInFlight = (async (): Promise<RefreshOutcome> => {
+      if (mockDataEnabled()) {
+        try {
+          const session = await mockApiRequest<SessionResponse>({
+            method: "POST",
+            path: "/api/v1/auth/refresh",
+          });
+          return { ok: true, session };
+        } catch {
+          return { ok: false, reason: "network" };
+        }
+      }
+      return doRefresh();
+    })().finally(() => {
       refreshInFlight = null;
     });
   }
@@ -171,6 +187,22 @@ export async function apiFetch<T>(
   options: RequestOptions = {},
 ): Promise<T> {
   const { method = "GET", body, noRetry, signal, onResponse } = options;
+
+  // Demo data mode (#142): answer from the in-memory mock transport. The
+  // router mirrors the real API contract (envelopes, status codes, headers,
+  // abort semantics) and throws the same ApiError class, so callers cannot
+  // tell the difference — production flips back by unsetting the flag.
+  if (mockDataEnabled()) {
+    return mockApiRequest<T>({
+      method,
+      path,
+      body,
+      signal,
+      onResponse: onResponse
+        ? (res) => onResponse(res as unknown as Response)
+        : undefined,
+    });
+  }
 
   const doFetch = () => {
     const headers: Record<string, string> = {};
