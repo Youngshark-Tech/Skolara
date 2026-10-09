@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   push:
-    branches: [main]
+    branches: [main, dev]
   # Ops trigger: re-run the full gate matrix on demand (issue #109) without a
   # no-op commit. Restricted to write-access users by GitHub.
   workflow_dispatch:
