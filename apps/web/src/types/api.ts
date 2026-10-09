@@ -154,3 +154,27 @@ export interface AttendanceUpsert {
   classGroupId: string;
   entries: AttendanceEntry[];
 }
+
+/**
+ * Assignment in the class work book (issue #190). `overdue` is DERIVED
+ * (dueDate < today), never stored — the same rule the live assignments
+ * domain will apply.
+ */
+export interface Assignment {
+  id: string;
+  title: string;
+  description?: string;
+  classGroupId: string;
+  subject?: string;
+  /** Calendar date (YYYY-MM-DD) the work is due. */
+  dueDate: string;
+  createdAt: string;
+}
+
+/** GET /api/v1/assignments response envelope. */
+export interface AssignmentPage {
+  assignments: Assignment[];
+  total: number;
+  limit: number;
+  offset: number;
+}

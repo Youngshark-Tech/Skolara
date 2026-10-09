@@ -396,3 +396,94 @@ describe("attendance register (#189)", () => {
     ).rejects.toMatchObject({ status: 400 });
   });
 });
+
+describe("assignment work book (#190)", () => {
+  it("seeds six assignments across both classes with a realistic overdue mix", async () => {
+    const page = await call<{
+      assignments: Array<{ id: string; classGroupId: string; dueDate: string }>;
+      total: number;
+    }>("GET", "/api/v1/assignments?limit=50");
+
+    expect(page.total).toBe(6);
+    const classes = new Set(page.assignments.map((a) => a.classGroupId));
+    expect(classes.has("cls-demo-8b")).toBe(true);
+    expect(classes.has("cls-demo-9g")).toBe(true);
+
+    // Sorted by due date ascending.
+    const dates = page.assignments.map((a) => a.dueDate);
+    expect([...dates].sort()).toEqual(dates);
+  });
+
+  it("derives the overdue filter from the due date, never a stored flag", async () => {
+    const overdue = await call<{ assignments: unknown[]; total: number }>(
+      "GET",
+      "/api/v1/assignments?status=overdue&limit=50",
+    );
+    expect(overdue.total).toBe(2); // the two past-due seeds
+    const open = await call<{ total: number }>(
+      "GET",
+      "/api/v1/assignments?status=open&limit=50",
+    );
+    expect(open.total).toBe(4);
+  });
+
+  it("filters by class group", async () => {
+    const eightBlue = await call<{ assignments: unknown[]; total: number }>(
+      "GET",
+      "/api/v1/assignments?classGroupId=cls-demo-8b&limit=50",
+    );
+    expect(eightBlue.total).toBe(3);
+  });
+
+  it("creates an assignment and it lands in the book", async () => {
+    const created = await call<{ id: string; title: string; dueDate: string }>(
+      "POST",
+      "/api/v1/assignments",
+      {
+        title: "Reading log week 6",
+        classGroupId: "cls-demo-9g",
+        subject: "English",
+        dueDate: "2030-06-30",
+      },
+    );
+    expect(created.id).toBeTruthy();
+    expect(created.title).toBe("Reading log week 6");
+
+    const page = await call<{ total: number }>("GET", "/api/v1/assignments?limit=50");
+    expect(page.total).toBe(7);
+  });
+
+  it("validates creation like the API will: short title, ghost class, bad date", async () => {
+    await expect(
+      call("POST", "/api/v1/assignments", {
+        title: "ab",
+        classGroupId: "cls-demo-9g",
+        dueDate: "2030-06-30",
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "validation_error" });
+
+    await expect(
+      call("POST", "/api/v1/assignments", {
+        title: "Valid title",
+        classGroupId: "cls-ghost",
+        dueDate: "2030-06-30",
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "validation_error" });
+
+    await expect(
+      call("POST", "/api/v1/assignments", {
+        title: "Valid title",
+        classGroupId: "cls-demo-9g",
+        dueDate: "30/06/2030",
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "validation_error" });
+
+    await expect(
+      call("POST", "/api/v1/assignments", {
+        title: "Valid title",
+        classGroupId: "cls-demo-9g",
+        dueDate: "2030-02-30",
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "validation_error" });
+  });
+});

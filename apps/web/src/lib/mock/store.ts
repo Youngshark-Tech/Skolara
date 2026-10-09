@@ -8,7 +8,7 @@
  * state-machine behavior stay in one auditable place, mirroring
  * services/api/internal/students/{service,repo}.go semantics.
  */
-import type { AcademicYear, AttendanceStatus, ClassGroup, Enrollment, EnrollmentStatus, Learner } from "@/types/api";
+import type { AcademicYear, Assignment, AttendanceStatus, ClassGroup, Enrollment, EnrollmentStatus, Learner } from "@/types/api";
 import { isTerminal, canTransition } from "@/lib/enrollment-states";
 import {
   DEMO_ADMIN,
@@ -18,6 +18,7 @@ import {
   SEED_LEARNERS,
   SEED_WALLET,
   SEED_YEARS,
+  seedAssignments,
   seedAttendance,
   seedEnrollments,
   type DemoUser,
@@ -48,6 +49,7 @@ interface StoreState {
   invoices: Invoice[];
   /** Key: `${date}|${classGroupId}|${learnerId}` — one mark per row (#189). */
   attendance: Map<string, { status: AttendanceStatus; recordedAt: string }>;
+  assignments: Assignment[];
   tokenCounter: number;
 }
 
@@ -75,6 +77,7 @@ function freshState(): StoreState {
     wallet: SEED_WALLET.map((w) => ({ ...w })),
     invoices: SEED_INVOICES.map((i) => ({ ...i })),
     attendance,
+    assignments: seedAssignments(today),
     tokenCounter: 0,
   };
 }
@@ -469,4 +472,88 @@ export function upsertAttendance(body: unknown): {
   }
 
   return getAttendanceRegister(date, classGroupId);
+}
+
+// ---------------------------------------------------------------------------
+// assignments (#190)
+
+const ASSIGNMENT_TITLE_MIN = 3;
+
+function isValidDateKey(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+/**
+ * The work book. `status` is DERIVED (overdue = dueDate before today, the
+ * demo's fixed todayKey) — never stored, matching how the live domain will
+ * judge lateness. Sorted by due date ascending; `classGroupId` and derived
+ * `status` filter server-side like the contract documents.
+ */
+export function listAssignments(params: {
+  classGroupId?: string;
+  status?: string;
+  limit: number;
+  offset: number;
+}): { assignments: Assignment[]; total: number; limit: number; offset: number } {
+  const today = todayKey();
+  let rows = [...state.assignments];
+
+  if (params.classGroupId) {
+    rows = rows.filter((a) => a.classGroupId === params.classGroupId);
+  }
+  if (params.status === "overdue" || params.status === "open") {
+    rows = rows.filter((a) =>
+      params.status === "overdue" ? a.dueDate < today : a.dueDate >= today,
+    );
+  }
+
+  rows.sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.title.localeCompare(b.title));
+  return {
+    assignments: rows
+      .slice(params.offset, params.offset + params.limit)
+      .map((a) => ({ ...a })),
+    total: rows.length,
+    limit: params.limit,
+    offset: params.offset,
+  };
+}
+
+export function createAssignment(body: unknown): Assignment {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const title = typeof b.title === "string" ? b.title.trim() : "";
+  const classGroupId = typeof b.classGroupId === "string" ? b.classGroupId : "";
+  const dueDate = typeof b.dueDate === "string" ? b.dueDate.trim() : "";
+  const description = typeof b.description === "string" ? b.description.trim() : "";
+  const subject = typeof b.subject === "string" ? b.subject.trim() : "";
+
+  if (title.length < ASSIGNMENT_TITLE_MIN) {
+    throw new MockApiError(
+      400,
+      "validation_error",
+      `title must be at least ${ASSIGNMENT_TITLE_MIN} characters.`,
+    );
+  }
+  if (!classGroupId || !state.classGroups.some((c) => c.id === classGroupId)) {
+    throw new MockApiError(400, "validation_error", "classGroupId must reference a class group.");
+  }
+  if (!dueDate || !isValidDateKey(dueDate)) {
+    throw new MockApiError(400, "validation_error", "dueDate must be a valid YYYY-MM-DD date.");
+  }
+
+  const created: Assignment = {
+    id:
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `asg-${Date.now()}-${state.assignments.length + 1}`,
+    title,
+    description: description || undefined,
+    classGroupId,
+    subject: subject || undefined,
+    dueDate,
+    createdAt: new Date().toISOString(),
+  };
+  state.assignments.push(created);
+  return { ...created };
 }

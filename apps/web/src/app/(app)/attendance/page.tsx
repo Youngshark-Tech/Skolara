@@ -65,7 +65,10 @@ export default function AttendancePage() {
   const [marks, setMarks] = useState<Map<string, AttendanceStatus>>(new Map());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  /** Fetch/refresh failures — cleared by the next successful load. */
+  const [loadError, setLoadError] = useState<string | null>(null);
+  /** Save failures — never touched by background loads (race-free). */
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(
@@ -110,11 +113,11 @@ export default function AttendancePage() {
           setSaved(savedMarks);
           setMarks(new Map(savedMarks));
         }
-        setError(null);
+        setLoadError(null);
         setNotice(null);
       } catch (err) {
         if (isAbortError(err)) return;
-        setError(err instanceof Error ? err.message : "failed to load attendance data");
+        setLoadError(err instanceof Error ? err.message : "failed to load attendance data");
       } finally {
         setLoading(false);
       }
@@ -157,11 +160,11 @@ export default function AttendancePage() {
       .filter((r) => marks.has(r.learnerId))
       .map((r) => ({ learnerId: r.learnerId, status: marks.get(r.learnerId)! }));
     if (entries.length === 0) {
-      setError("Mark at least one learner before saving the register.");
+      setSaveError("Mark at least one learner before saving the register.");
       return;
     }
     setSaving(true);
-    setError(null);
+    setSaveError(null);
     setNotice(null);
     try {
       const register = await apiFetch<AttendanceRegister>("/api/v1/attendance", {
@@ -175,7 +178,7 @@ export default function AttendancePage() {
       setMarks(new Map(savedMarks));
       setNotice(`Register saved: ${register.total} learners marked for ${date}.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "failed to save the register");
+      setSaveError(err instanceof Error ? err.message : "failed to save the register");
     } finally {
       setSaving(false);
     }
@@ -226,7 +229,8 @@ export default function AttendancePage() {
         </div>
       </header>
 
-      <ErrorNote message={error} />
+      <ErrorNote message={loadError} />
+      {saveError && <ErrorNote message={saveError} />}
       {notice && (
         <p className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
           {notice}

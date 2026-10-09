@@ -12,6 +12,7 @@
  */
 import type {
   AcademicYear,
+  Assignment,
   AttendanceStatus,
   ClassGroup,
   Enrollment,
@@ -213,5 +214,36 @@ export function seedAttendance(today: string): SeedAttendanceRow[] {
     classGroupId,
     learnerId: `lrn-demo-${String(n).padStart(3, "0")}`,
     status,
+  }));
+}
+
+/**
+ * Seed assignments (#190) around TODAY so the work book always shows a
+ * realistic mix: two overdue, one due within days, the rest upcoming —
+ * across both classes and several subjects, one without a subject.
+ */
+export function seedAssignments(today: string): Assignment[] {
+  const dayOffset = (days: number): string => {
+    const d = new Date(`${today}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  };
+  const at = (days: number, time: string): string => `${dayOffset(days)}T${time}`;
+  const rows: Array<[string, string, string | undefined, string | undefined, number]> = [
+    ["Algebra worksheet 4", "cls-demo-8b", "Mathematics", "Factorising quadratics, questions 1–15.", -7],
+    ["Composition: My community", "cls-demo-8b", "English", "One page, handwritten draft due.", -3],
+    ["Photosynthesis practical write-up", "cls-demo-9g", "Biology", "Record observations from the lab session.", 2],
+    ["Map work: Kenyan counties", "cls-demo-8b", undefined, "Label the outline map provided in class.", 5],
+    ["Physics problem set: forces", "cls-demo-9g", "Physics", "Show all working; SI units required.", 10],
+    ["Kiswahili insha: Sikujua", "cls-demo-9g", "Kiswahili", undefined, 1],
+  ];
+  return rows.map(([title, classGroupId, subject, description, due], i) => ({
+    id: `asg-demo-${String(i + 1).padStart(3, "0")}`,
+    title,
+    description,
+    classGroupId,
+    subject,
+    dueDate: dayOffset(due),
+    createdAt: at(due - 14, "09:00:00Z"),
   }));
 }
