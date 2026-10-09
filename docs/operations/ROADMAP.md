@@ -29,6 +29,9 @@ Post-onboarding engineering roadmap. Order reflects dependency and risk.
 
 ## Wave 4 — Intelligence (spec §1 product loop)
 
+> The AI capability ladder now lives in [AI-ROADMAP.md](AI-ROADMAP.md)
+> (epic #184, children #160-#167) — queued as issues per the wave-4 items below.
+
 - [ ] Analytics over derived ledger + attendance (read models)
 - [ ] Timetabling; curriculum strands/outcomes (academics is extensible by design)
 - [ ] AI recommendations behind the intelligence-never-owns-truth boundary (ADR-010)
