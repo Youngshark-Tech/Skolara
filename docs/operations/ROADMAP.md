@@ -9,7 +9,8 @@ Post-onboarding engineering roadmap. Order reflects dependency and risk.
 - [ ] Shared Redis rate limiter (multi-replica ready); middleware port exists
 - [x] `/metrics` edge ACL + alert rules documented for operators (runbook §4) — proxy deployment action remains
 - [ ] Password reset / account recovery (email verification groundwork)
-- [x] Web: enrollments workspace live (admit story, #58); students + command center fully interactive — academics/attendance/finance workspaces remain on the established pattern (contract already documents every endpoint)
+- [x] Web: enrollments workspace live (admit story, #58); students + command center fully interactive
+- [x] Web: every workspace live on the demo transport — finance wallet + invoice book (#187), academics years/classes with live enrollment counts (#188), attendance roll-call register with atomic idempotent upserts (#189), assignments work book with publish flow (#190). The no-database demo is now complete end-to-end: enroll → place in class → take attendance → publish work → see the money picture.
 - [ ] School onboarding wizard (groups → school → members → academics) in the web shell
 
 ## Wave 2 — Notification fabric & sync
