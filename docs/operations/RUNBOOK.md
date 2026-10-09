@@ -48,6 +48,11 @@ Migrations are **embedded in the API binary** — there is no runtime migrations
 
 **Production refuses to boot** without a strong JWT secret, a webhook secret ≥ 32 bytes, and real CORS origins.
 
+**Web app flags (build-time — `NEXT_PUBLIC_*` inlines at build; change → redeploy):**
+
+- `NEXT_PUBLIC_DEMO_MODE` — **unset ships the zero-config demo** (issue #153): open access + in-memory sample data, no database. **Go-live release blocker: set `NEXT_PUBLIC_DEMO_MODE=false` on any deployment holding real student, guardian, or financial data** (an unset flag means the demo default applies — removal alone is NOT enough), plus `DATABASE_URL` + the API variables above. See [DEPLOY_VERCEL.md](DEPLOY_VERCEL.md) and [DEMO.md](DEMO.md).
+- `NEXT_PUBLIC_AUTH_BYPASS` — open-access mode (#141); implied by demo mode. Must be unset in production.
+
 ## 3. Deployments & migrations
 
 - Migrations are embedded and applied **automatically at boot** (golang-migrate, atomic per file).

@@ -18,6 +18,14 @@
  * NEXT_PUBLIC_* values are inlined at BUILD time: toggling the flags on
  * Vercel requires a redeploy, not just a save. The credential overrides
  * exist for deployments that seeded accounts with SKOLARA_DEMO_PASSWORD.
+ *
+ * Zero-config default (issue #153): next.config.mjs injects
+ * NEXT_PUBLIC_DEMO_MODE="true" at the CONFIGURATION layer when the variable
+ * is unset/empty at build time — a zero-config deployment is a demo. The
+ * decision lives in src/lib/build-flags.mjs (unit-pinned there); THIS module
+ * keeps strict parsing ("true" enables, everything else is off, demo mode
+ * implies open access). Going live = set NEXT_PUBLIC_DEMO_MODE=false and
+ * redeploy (RUNBOOK go-live checklist).
  */
 
 export const AUTH_BYPASS_FLAG = "NEXT_PUBLIC_AUTH_BYPASS";
