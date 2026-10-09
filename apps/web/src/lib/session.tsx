@@ -22,6 +22,7 @@ import {
 } from "./api";
 import type { Me, Membership } from "./permissions";
 import { AUTH_HINT_COOKIE_NAME } from "./auth-cookies";
+import { authBypassEnabled, bypassCredentials } from "./auth-bypass";
 
 interface SessionState {
   /** null while loading; undefined when logged out. */
@@ -103,13 +104,43 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (!outcome.ok) {
           if (outcome.reason === "network") {
             setError("Cannot reach the server. Check your connection and try again.");
-          } else {
-            clearSessionState();
+            return false;
           }
-          return false;
+          if (!authBypassEnabled()) {
+            clearSessionState();
+            return false;
+          }
+          // Open-access mode (#141): the refresh cookie was definitively
+          // rejected and this deployment disabled the login surface —
+          // establish a REAL demo session automatically so every downstream
+          // guard (JWT, RBAC, tenant scoping, audit) keeps working. ONE
+          // attempt; on failure we surface the actual API error (e.g. the
+          // demo seed is not enabled) instead of masking it.
+          try {
+            const creds = bypassCredentials();
+            const session = await apiFetch<{ accessToken: string }>(
+              "/api/v1/auth/login",
+              {
+                method: "POST",
+                body: { email: creds.email, password: creds.password },
+                noRetry: true,
+              },
+            );
+            setAccessToken(session.accessToken);
+            setAuthHint(true);
+          } catch (err) {
+            clearSessionState();
+            setError(
+              err instanceof Error && err.message
+                ? `Automatic demo sign-in failed: ${err.message}`
+                : "Automatic demo sign-in failed — sign in manually below.",
+            );
+            return false;
+          }
+        } else {
+          setAccessToken(outcome.session.accessToken);
+          setAuthHint(true);
         }
-        setAccessToken(outcome.session.accessToken);
-        setAuthHint(true);
       }
       const [meRes, membershipsRes] = await Promise.all([
         apiFetch<Me>("/api/v1/me"),

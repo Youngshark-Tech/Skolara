@@ -1,22 +1,101 @@
 # Skolara Demo Mode
 
-Demo mode seeds an **idempotent demo dataset** at API startup so a fresh
-deployment always has working login details and a populated workspace
-(issue #128). It is enabled with the environment variable:
+Skolara has THREE deployment postures on the demo spectrum, from the most
+detached to the most production-like:
+
+| Mode | Flag | Database | API service | Auth surface |
+|------|------|----------|-------------|--------------|
+| **Demo data mode** | `NEXT_PUBLIC_DEMO_MODE=true` (web) | **None** | Not needed | Disabled, any credentials sign in |
+| **Open-access mode** | `NEXT_PUBLIC_AUTH_BYPASS=true` (web) | Required | Required | Disabled, auto sign-in as demo admin |
+| **Full production posture** | none | Required | Required | Normal login (+ optional demo accounts below) |
+
+All are temporary and demo-only — see the security envelope at the bottom.
+
+## Demo data mode (no database at all)
+
+For product demos and staging reviews before the database is provisioned, the
+web app can run ENTIRELY on an in-memory sample dataset (issue #142):
+
+```bash
+# Web app only — this is the ONLY required change (build-time, REDEPLOY after):
+NEXT_PUBLIC_DEMO_MODE=true
+```
+
+What changes:
+
+- Every API call is answered by an in-memory mock transport
+  (`apps/web/src/lib/mock`) that mirrors the real API contract: the same
+  envelopes, status codes, error mapping, pagination headers (X-Total-Count),
+  and abort semantics. The Go API service and PostgreSQL are not contacted at
+  all — the deployment needs no `DATABASE_URL`.
+- Authentication is disabled (implied `NEXT_PUBLIC_AUTH_BYPASS`): any email
+  and password sign in, sessions never expire, and the sign-in name is derived
+  from the email's local part.
+- The seeded dataset mirrors the API's demo seed and covers the WHOLE
+  enrollment lifecycle: 12 learners, an academic year pair, two class groups,
+  enrollments in all nine states, wallet balances, and invoices.
+- Writes are interactive: creating learners, enrolling, and lifecycle
+  transitions all work — through the same validation and state machine as the
+  real API (including the "new learners become searchable only after their
+  first enrollment" behavior).
+- A **"Demo data — not live"** badge is pinned in the sidebar so sample
+  figures are never mistaken for live ones.
+- Sample data resets on every full page load — deliberate, so a demo always
+  starts from the clean seed.
+
+**Connecting production later (the point of this mode):** unset
+`NEXT_PUBLIC_DEMO_MODE` on the web app, set `DATABASE_URL` (+ the API
+variables from [DEPLOY_VERCEL.md](DEPLOY_VERCEL.md)) on the api service, and
+redeploy. Migrations and schemas are already in place and CI-verified
+(`services/api/migrations/`, up/down/up gate) — no data work is needed; the
+app flips from mock transport to the real fetch client byte-for-byte.
+
+## Open-access mode (authentication bypass, temporary)
+
+For demo/staging deployments with a real database where even typing the demo
+credentials is friction, the web app can disable the login surface entirely
+(issue #141):
+
+```bash
+# Web app (build-time — REDEPLOY after changing it):
+NEXT_PUBLIC_AUTH_BYPASS=true
+# Optional overrides — must match what the API actually seeded:
+NEXT_PUBLIC_BYPASS_EMAIL=admin@skolara.dev
+NEXT_PUBLIC_BYPASS_PASSWORD=SkolaraDemo!2026
+
+# API (required, or the automatic sign-in has nothing to log into):
+SKOLARA_DEMO_SEED=true
+```
+
+What changes:
+
+- The edge guard stops redirecting unauthenticated visitors to `/login`.
+- On boot, the session provider exchanges the seeded demo credentials for a
+  **real session** (the same login endpoint, JWT, refresh rotation, RBAC,
+  tenant scoping, and audit as production). The visitor simply never sees the
+  form.
+- `/login` shows a demo-mode note and retries the automatic sign-in once if
+  boot could not establish a session.
+- "Sign out" is hidden in the app shell: logging out would instantly
+  auto-relogin, so the control would be misleading.
+- The hero landing page shows an **Open workspace** CTA instead of
+  Log in / Sign up once the automatic session is live.
+
+Failure is loud, never silent: if the demo dataset is not seeded (the API
+runs without `SKOLARA_DEMO_SEED=true`) or the password override does not
+match, the login surface shows the API's real error and the note above.
+
+## Standard demo seed
+
+The API-side idempotent demo dataset (issue #128) provisions working login
+details for any fresh deployment so a production posture always has accounts
+to sign in with:
 
 ```bash
 SKOLARA_DEMO_SEED=true
 # Optional — override the documented password (fresh seeds only):
 SKOLARA_DEMO_PASSWORD=<your-own-demo-password>
 ```
-
-> **SECURITY — READ BEFORE ENABLING ON ANY REAL DEPLOYMENT**
-> Demo credentials are public knowledge (documented here and in the README).
-> Demo mode must NEVER be enabled on a deployment that holds real student,
-> guardian, or financial data. The startup log prints a loud warning whenever
-> it is active.
-
-## Demo accounts
 
 | Account | Email | Password | Workspace role |
 |---------|-------|----------|----------------|
@@ -60,6 +139,21 @@ under concurrent cold starts:
 
 This is proven by an integration test (`internal/demo`) that runs the seed
 three times against a live PostgreSQL and asserts exact object counts.
+
+## Security envelope — read before enabling anything on real data
+
+> Demo credentials are public knowledge (documented here and in the README),
+> and every mode above hands visitors working sessions. These postures must
+> NEVER be enabled on a deployment that holds real student, guardian, or
+> financial data. The API prints a loud startup warning whenever
+> `SKOLARA_DEMO_SEED` is active; the web modes are guarded only by
+> configuration discipline, so review the environment variables before every
+> production cutover.
+>
+> **Returning to full production:** unset `NEXT_PUBLIC_DEMO_MODE` and
+> `NEXT_PUBLIC_AUTH_BYPASS` on the web app, keep `SKOLARA_DEMO_SEED` unset on
+> the API, and redeploy. No code changes are involved — the switches exist
+> only in configuration.
 
 ## Removing demo data
 
