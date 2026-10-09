@@ -82,3 +82,40 @@ export interface ClassGroup {
   academicYearId: string;
   name: string;
 }
+
+/**
+ * Wallet balance by ledger purpose (finance read surface). The demo transport
+ * (#142) seeds main/operations/tuition; the real API derives the same shape
+ * from the double-entry ledger.
+ */
+export interface WalletBalance {
+  purpose: string;
+  balanceMinor: number;
+  currency: string;
+}
+
+/** GET /api/v1/wallet response envelope. */
+export interface WalletResponse {
+  wallet: WalletBalance[];
+}
+
+/**
+ * Invoice in the school's invoice book (demo transport seeds open/paid/void;
+ * the production shape grows from the same contract, #179).
+ */
+export interface Invoice {
+  id: string;
+  learnerId: string;
+  status: "open" | "paid" | "void";
+  amountMinor: number;
+  currency: string;
+  dueDate: string;
+}
+
+/** GET /api/v1/invoices response envelope. */
+export interface InvoicePage {
+  invoices: Invoice[];
+  total: number;
+  limit: number;
+  offset: number;
+}
