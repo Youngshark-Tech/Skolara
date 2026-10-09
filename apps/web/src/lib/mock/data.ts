@@ -15,25 +15,16 @@ import type {
   ClassGroup,
   Enrollment,
   EnrollmentStatus,
+  Invoice,
   Learner,
+  WalletBalance,
 } from "@/types/api";
 
 export const DEMO_SCHOOL_ID = "school-demo-rvs001";
 
-export interface WalletBalance {
-  purpose: string;
-  balanceMinor: number;
-  currency: string;
-}
-
-export interface Invoice {
-  id: string;
-  learnerId: string;
-  status: "open" | "paid" | "void";
-  amountMinor: number;
-  currency: string;
-  dueDate: string;
-}
+// Contract types live in types/api.ts (openapi.yaml is the source of truth);
+// the demo dataset re-exports them so store/router imports stay stable.
+export type { Invoice, WalletBalance };
 
 export interface DemoUser {
   id: string;
