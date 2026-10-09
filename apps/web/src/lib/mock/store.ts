@@ -8,7 +8,7 @@
  * state-machine behavior stay in one auditable place, mirroring
  * services/api/internal/students/{service,repo}.go semantics.
  */
-import type { AcademicYear, ClassGroup, Enrollment, EnrollmentStatus, Learner } from "@/types/api";
+import type { AcademicYear, AttendanceStatus, ClassGroup, Enrollment, EnrollmentStatus, Learner } from "@/types/api";
 import { isTerminal, canTransition } from "@/lib/enrollment-states";
 import {
   DEMO_ADMIN,
@@ -18,6 +18,7 @@ import {
   SEED_LEARNERS,
   SEED_WALLET,
   SEED_YEARS,
+  seedAttendance,
   seedEnrollments,
   type DemoUser,
   type Invoice,
@@ -45,10 +46,25 @@ interface StoreState {
   classGroups: ClassGroup[];
   wallet: WalletBalance[];
   invoices: Invoice[];
+  /** Key: `${date}|${classGroupId}|${learnerId}` — one mark per row (#189). */
+  attendance: Map<string, { status: AttendanceStatus; recordedAt: string }>;
   tokenCounter: number;
 }
 
+/** The calendar date the demo treats as "today" — fixed at state creation. */
+function todayKey(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function freshState(): StoreState {
+  const today = todayKey();
+  const attendance = new Map<string, { status: AttendanceStatus; recordedAt: string }>();
+  for (const row of seedAttendance(today)) {
+    attendance.set(`${row.date}|${row.classGroupId}|${row.learnerId}`, {
+      status: row.status,
+      recordedAt: `${row.date}T07:55:00Z`,
+    });
+  }
   return {
     users: [DEMO_ADMIN],
     currentUser: DEMO_ADMIN,
@@ -58,6 +74,7 @@ function freshState(): StoreState {
     classGroups: SEED_CLASSES.map((c) => ({ ...c })),
     wallet: SEED_WALLET.map((w) => ({ ...w })),
     invoices: SEED_INVOICES.map((i) => ({ ...i })),
+    attendance,
     tokenCounter: 0,
   };
 }
@@ -341,4 +358,115 @@ export function listInvoices(params: {
       .map((i) => ({ ...i })),
     total: filtered.length,
   };
+}
+
+// ---------------------------------------------------------------------------
+// attendance (#189)
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const ATTENDANCE_STATUSES: ReadonlySet<string> = new Set([
+  "present",
+  "absent",
+  "late",
+  "excused",
+]);
+
+/**
+ * A learner may appear on a class register while their enrollment is any
+ * non-terminal status bound to that class (active, admitted, suspended,
+ * transfer_pending) — suspended learners still get roll-called (they are
+ * absent, and the register is the evidence). Applicants carry no class
+ * binding and terminal states leave the register, mirroring how the live
+ * attendance domain reads enrollments.
+ */
+function learnerOnClassRegister(learnerId: string, classGroupId: string): boolean {
+  return state.enrollments.some(
+    (e) =>
+      e.learnerId === learnerId &&
+      e.classGroupId === classGroupId &&
+      !isTerminal(e.status),
+  );
+}
+
+export function getAttendanceRegister(date: string, classGroupId: string): {
+  date: string;
+  classGroupId: string;
+  records: Array<{ learnerId: string; status: AttendanceStatus; recordedAt: string }>;
+  total: number;
+} {
+  if (!DATE_RE.test(date)) {
+    throw new MockApiError(400, "validation_error", "date must be YYYY-MM-DD.");
+  }
+  if (!state.classGroups.some((c) => c.id === classGroupId)) {
+    throw new MockApiError(400, "validation_error", "classGroupId does not exist.");
+  }
+  const records = [...state.attendance.entries()]
+    .filter(([key]) => key.startsWith(`${date}|${classGroupId}|`))
+    .map(([key, value]) => ({
+      learnerId: key.split("|")[2]!,
+      status: value.status,
+      recordedAt: value.recordedAt,
+    }))
+    .sort((a, b) => a.learnerId.localeCompare(b.learnerId));
+  return { date, classGroupId, records, total: records.length };
+}
+
+export function upsertAttendance(body: unknown): {
+  date: string;
+  classGroupId: string;
+  records: Array<{ learnerId: string; status: AttendanceStatus; recordedAt: string }>;
+  total: number;
+} {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const date = typeof b.date === "string" ? b.date : "";
+  const classGroupId = typeof b.classGroupId === "string" ? b.classGroupId : "";
+  const entries = Array.isArray(b.entries) ? b.entries : null;
+
+  if (!DATE_RE.test(date)) {
+    throw new MockApiError(400, "validation_error", "date must be YYYY-MM-DD.");
+  }
+  if (!state.classGroups.some((c) => c.id === classGroupId)) {
+    throw new MockApiError(400, "validation_error", "classGroupId does not exist.");
+  }
+  if (!entries || entries.length === 0) {
+    throw new MockApiError(400, "validation_error", "entries must be a non-empty array.");
+  }
+
+  // Validate EVERYTHING before mutating anything — a register save is atomic,
+  // mirroring the API's transactional writes.
+  const marks: Array<{ learnerId: string; status: AttendanceStatus }> = [];
+  for (const entry of entries) {
+    const e = (entry ?? {}) as Record<string, unknown>;
+    const learnerId = typeof e.learnerId === "string" ? e.learnerId : "";
+    const status = typeof e.status === "string" ? e.status : "";
+    if (!learnerId || !state.learners.some((l) => l.id === learnerId)) {
+      throw new MockApiError(400, "validation_error", `unknown learnerId: ${learnerId || "(empty)"}`);
+    }
+    if (!ATTENDANCE_STATUSES.has(status)) {
+      throw new MockApiError(
+        400,
+        "validation_error",
+        `status must be one of present, absent, late, excused (got: ${status || "(empty)"})`,
+      );
+    }
+    if (!learnerOnClassRegister(learnerId, classGroupId)) {
+      throw new MockApiError(
+        409,
+        "not_enrolled",
+        "learner is not enrolled in this class group",
+      );
+    }
+    marks.push({ learnerId, status: status as AttendanceStatus });
+  }
+
+  const recordedAt = new Date().toISOString();
+  for (const mark of marks) {
+    // Idempotent upsert: re-saving a learner replaces their mark in place.
+    state.attendance.set(`${date}|${classGroupId}|${mark.learnerId}`, {
+      status: mark.status,
+      recordedAt,
+    });
+  }
+
+  return getAttendanceRegister(date, classGroupId);
 }

@@ -12,6 +12,7 @@
  */
 import type {
   AcademicYear,
+  AttendanceStatus,
   ClassGroup,
   Enrollment,
   EnrollmentStatus,
@@ -180,3 +181,37 @@ export const SEED_INVOICES: Invoice[] = [
   { id: "inv-demo-005", learnerId: "lrn-demo-005", status: "paid", amountMinor: 1850000, currency: "KES", dueDate: "2026-02-01" },
   { id: "inv-demo-006", learnerId: "lrn-demo-009", status: "void", amountMinor: 925000, currency: "KES", dueDate: "2026-02-01" },
 ];
+
+/**
+ * Seed roll calls for TODAY (issue #189) so the attendance workspace shows a
+ * living register on first visit. Every seeded learner holds a non-terminal
+ * enrollment bound to their class — the same rule upsertAttendance enforces.
+ * Dates arrive from the store (computed once at state creation) so the demo
+ * never shows a stale register; tests pass explicit dates instead.
+ */
+export interface SeedAttendanceRow {
+  date: string;
+  classGroupId: string;
+  learnerId: string;
+  status: AttendanceStatus;
+}
+
+export function seedAttendance(today: string): SeedAttendanceRow[] {
+  const rows: Array<[number, string, AttendanceStatus]> = [
+    // Grade 8 - Blue: two active, one admitted, one suspended.
+    [1, "cls-demo-8b", "present"],
+    [2, "cls-demo-8b", "present"],
+    [3, "cls-demo-8b", "late"],
+    [5, "cls-demo-8b", "absent"],
+    // Grade 9 - Green: transfer_pending, active, admitted.
+    [6, "cls-demo-9g", "present"],
+    [11, "cls-demo-9g", "excused"],
+    [12, "cls-demo-9g", "absent"],
+  ];
+  return rows.map(([n, classGroupId, status]) => ({
+    date: today,
+    classGroupId,
+    learnerId: `lrn-demo-${String(n).padStart(3, "0")}`,
+    status,
+  }));
+}
